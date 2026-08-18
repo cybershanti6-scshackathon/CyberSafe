@@ -3,7 +3,7 @@
 
 #INTRO 
 # 🛡️ MSME Cyber Scanner (CERT-In Compliance Tool)
-> **Automated 1-Click CERT-In Compliance for India's 63 Million MSMEs**
+> **Automated CERT-In Compliance for India's 63 Million MSMEs**
 
 An AI-powered, agentless network vulnerability scanner designed to rescue India's Micro, Small, and Medium Enterprises (MSMEs) from massive regulatory fines under the **IT Act 2000** and the **DPDP Act 2023**. 
 
