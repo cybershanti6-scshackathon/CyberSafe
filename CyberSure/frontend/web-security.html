@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web Security — CyberSure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0..200" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<div data-app>
+
+<div class="page">
+  <div class="page-head"><div><h1>Web Security</h1><p>Analyze selected website security services and configurations.</p></div></div>
+  <div class="notice"><strong>Authorization:</strong> Only assess websites and infrastructure that you own or are explicitly authorized to test.</div>
+  <form id="webForm" class="card" style="margin-top:16px">
+    <div class="field"><label>Website URL</label><input required type="url" placeholder="https://example.com"></div>
+    <div class="actions"><button class="btn btn-primary" type="submit">Start Web Security Assessment</button></div>
+  </form>
+  <div class="analysis" id="webAnalysis"><span class="spinner"></span><strong>Checking authorized website security information…</strong></div>
+  <section class="results" id="webResults">
+    <div class="grid-3" style="margin-top:16px">
+      <div class="card"><span class="muted">Website Security Score</span><div class="score">86/100</div></div>
+      <div class="card"><span class="muted">HTTPS</span><div class="score" style="color:var(--success)">Secure</div></div>
+      <div class="card"><span class="muted">HTTP Service</span><div class="score">Detected</div></div>
+      <div class="card"><span class="muted">TCP Services</span><div class="score">Review</div></div>
+      <div class="card"><span class="muted">SSL/TLS</span><div class="score" style="color:var(--success)">Good</div></div>
+      <div class="card"><span class="muted">Security Headers</span><div class="score">Review</div></div>
+    </div>
+    <div class="card" style="margin-top:16px"><h2 class="section-title" style="font-size:22px">Findings</h2>
+      <div class="finding"><span class="severity medium">MEDIUM</span><div><strong>HTTP service exposure</strong><p class="muted">Review whether HTTP is required and redirect to HTTPS where appropriate.</p></div></div>
+      <div class="finding"><span class="severity low">LOW</span><div><strong>Security headers</strong><p class="muted">Review common security headers and apply appropriate policies.</p></div></div>
+    </div>
+    <div class="actions"><button class="btn btn-primary" id="webReport">Download PDF Report</button><button class="btn btn-secondary" id="webRerun">Run Assessment Again</button></div>
+  </section>
+</div>
+
+</div>
+<script src="app.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded",()=>initAssessment({formId:"webForm",analysisId:"webAnalysis",resultsId:"webResults",reportBtnId:"webReport",rerunId:"webRerun",title:"Web Security Report",reportText:"Web Security assessment. Overall score 86/100. Findings: HTTP service exposure and security headers require review."}));
+</script>
+</body>
+</html>

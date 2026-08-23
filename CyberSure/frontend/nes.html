@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NES — CyberSure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0..200" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<div data-app>
+
+<div class="page">
+  <div class="page-head"><div><h1>NES — Network & Email Security</h1><p>Assess network, Wi-Fi and email security information.</p></div></div>
+  <div class="notice"><strong>Authorization:</strong> Only assess networks, systems or domains that you own or are explicitly authorized to assess.</div>
+  <form id="nesForm" class="card" style="margin-top:16px">
+    <div class="form-grid">
+      <div class="field"><label>IP Address</label><input required placeholder="192.168.1.1"></div>
+      <div class="field"><label>Wi-Fi Security Type</label><select required><option value="">Select type</option><option>WPA3</option><option>WPA2</option><option>WPA</option><option>WEP</option><option>Open</option><option>Unknown</option></select></div>
+      <div class="field full"><label>Email Domain</label><input required placeholder="company.com"></div>
+    </div>
+    <div class="actions"><button class="btn btn-primary" type="submit">Start NES Assessment <span class="material-symbols-outlined">arrow_forward</span></button></div>
+  </form>
+  <div class="analysis" id="nesAnalysis"><span class="spinner"></span><strong>Analyzing network, Wi-Fi and email security information…</strong></div>
+  <section class="results" id="nesResults">
+    <div class="grid-4" style="margin-top:16px">
+      <div class="card"><span class="muted">Overall NES Score</span><div class="score">79/100</div></div>
+      <div class="card"><span class="muted">Network</span><div class="score">82</div></div>
+      <div class="card"><span class="muted">Wi-Fi</span><div class="score">74</div></div>
+      <div class="card"><span class="muted">Email</span><div class="score">80</div></div>
+    </div>
+    <div class="card" style="margin-top:16px"><h2 class="section-title" style="font-size:22px">NES Findings</h2>
+      <div class="finding"><span class="severity high">HIGH</span><div><strong>DMARC policy requires review</strong><p class="muted">A stronger enforcement policy can reduce spoofing risk.</p></div></div>
+      <div class="finding"><span class="severity medium">MEDIUM</span><div><strong>Wi-Fi security posture</strong><p class="muted">Use WPA3 or WPA2 and avoid legacy protocols.</p></div></div>
+    </div>
+    <div class="actions"><button class="btn btn-primary" id="nesReport">Download PDF Report</button><button class="btn btn-secondary" id="nesRerun">Run Assessment Again</button></div>
+  </section>
+</div>
+
+</div>
+<script src="app.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded",()=>initAssessment({formId:"nesForm",analysisId:"nesAnalysis",resultsId:"nesResults",reportBtnId:"nesReport",rerunId:"nesRerun",title:"NES Security Report",reportText:"Network and Email Security assessment. Overall score 79/100. Findings: DMARC policy and Wi-Fi security posture require review."}));
+</script>
+</body>
+</html>
