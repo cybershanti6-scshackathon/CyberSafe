@@ -67,7 +67,16 @@ python3 launch.py
 │   ├── scanners/          # Scanner modules (RPP, NES, Web)
 │   ├── config_parsers/    # Vendor config normalization
 │   └── engine/            # Audit orchestration
+├── scripts/               # Utility scripts
+│   ├── build_exe.py       # Windows .exe builder
+│   ├── cleanup_move.py    # Project cleanup utility
+│   └── generate_feasibility_pptx.py  # Presentation generator
+├── tests/                 # Test files
+│   └── test_pdf_gen.py    # PDF generation test
+├── docs/                  # Documentation & reference files
+│   └── Elemental_Cyber_Defense_Controls_for_MSME.pdf
 ├── launch.py              # One-click launcher
+├── run.py                 # CLI runner
 ├── start.cmd              # Windows launcher
 ├── start.sh               # Linux/Mac launcher
 └── requirements.txt       # Python dependencies

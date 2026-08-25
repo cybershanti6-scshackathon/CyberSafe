@@ -1,7 +1,0 @@
-fastapi
-uvicorn
-httpx
-bcrypt
-pydantic
-google-genai
-python-dotenv

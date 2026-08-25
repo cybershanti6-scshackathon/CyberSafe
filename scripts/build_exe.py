@@ -19,7 +19,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).parent.resolve()
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
 FRONTEND_DIR = PROJECT_ROOT / "frontend"

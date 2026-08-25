@@ -2,8 +2,13 @@
 import sys
 import os
 
+# Add project root to path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 # Ensure we're in the right directory
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(project_root)
 
 from msme_auditor.pdf_generator import generate_pdf
 

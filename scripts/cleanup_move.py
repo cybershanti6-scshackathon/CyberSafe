@@ -10,7 +10,7 @@ import os
 import shutil
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CLEANUP = PROJECT_ROOT / "_cleanup"
 
 def move(src_rel: str, dest_subfolder: str):

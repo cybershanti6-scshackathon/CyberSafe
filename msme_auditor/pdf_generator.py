@@ -136,6 +136,9 @@ class AuditPDF(FPDF):
         # Try to load logo image
         self._logo_path = None
         _logo_candidates = [
+            os.path.join(os.path.dirname(__file__), '..', 'assets', 'Logo.jpeg'),
+            os.path.join(os.path.dirname(__file__), '..', 'assets', 'Logo.jpg'),
+            os.path.join(os.path.dirname(__file__), '..', 'assets', 'Logo.png'),
             os.path.join(os.path.dirname(__file__), '..', 'Logo.jpeg'),
             os.path.join(os.path.dirname(__file__), '..', 'Logo.jpg'),
             os.path.join(os.path.dirname(__file__), '..', 'Logo.png'),
