@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RPP — CyberSure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0..200" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<div data-app>
+
+<div class="page">
+  <div class="page-head"><div><h1>RPP — Robust Password Policy</h1><p>Assess password and authentication security controls.</p></div></div>
+
+  <!-- Scanner selection -->
+  <div class="card" style="margin-bottom:16px">
+    <h2 class="section-title" style="font-size:22px">Select RPP Scanners</h2>
+    <p class="section-subtitle">Choose which password policy controls to assess.</p>
+    <div id="rppScannerList" class="control-grid" style="margin-top:12px">
+      <div class="muted" style="padding:20px">Loading scanners from backend...</div>
+    </div>
+  </div>
+
+  <!-- Shared config form -->
+  <form id="rppForm" class="card">
+    <div class="form-grid">
+      <div class="field"><label>Target Type</label>
+        <select id="rppTargetType" name="target_type">
+          <option value="web">Web (URL)</option>
+          <option value="windows">Windows (this PC)</option>
+          <option value="linux">Linux (this machine)</option>
+        </select>
+        <div class="muted" style="font-size:12px">Auto-detected from your system</div>
+      </div>
+      <div class="field"><label>Target URL / Host</label>
+        <input type="text" id="rppTarget" name="target" placeholder="http://localhost:8765">
+        <div class="muted" style="font-size:12px" id="rppTargetHelp">URL for web scans, or leave blank for OS scans</div>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:18px">
+      <button class="btn btn-primary" type="submit" id="rppSubmit">
+        <span class="material-symbols-outlined">security</span> Run Selected Scanners
+      </button>
+      <button class="btn btn-secondary" type="button" id="rppReport" style="display:none">
+        <span class="material-symbols-outlined">download</span> Download PDF Report
+      </button>
+    </div>
+  </form>
+
+  <div class="analysis" id="rppAnalysis"><span class="spinner"></span><strong id="rppProgressText">Initializing scanners...</strong></div>
+  <section class="results" id="rppResults"></section>
+</div>
+
+</div>
+<script src="/static/app.js"></script>
+<script src="/static/scanner.js"></script>
+<script>
+const RPP_SCANNER_IDS = ['rpp1', 'rpp2', 'rpp3', 'rpp4'];
+let rppSchemas = {};
+let rppSelectedScanners = new Set();
+let rppLastResults = null;
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const listEl = document.getElementById('rppScannerList');
+  const form = document.getElementById('rppForm');
+  const analysisEl = document.getElementById('rppAnalysis');
+  const resultsEl = document.getElementById('rppResults');
+  const progressText = document.getElementById('rppProgressText');
+  const reportBtn = document.getElementById('rppReport');
+  const targetTypeEl = document.getElementById('rppTargetType');
+  const targetEl = document.getElementById('rppTarget');
+  const targetHelp = document.getElementById('rppTargetHelp');
+
+  // Auto-detect OS
+  try {
+    const sys = await ScannerAPI.systemInfo();
+    targetTypeEl.value = sys.recommended_target_type || 'web';
+  } catch (e) {}
+
+  // Toggle target field visibility
+  targetTypeEl.addEventListener('change', () => {
+    const isWeb = targetTypeEl.value === 'web';
+    targetEl.closest('.field').style.display = isWeb ? '' : 'none';
+    targetHelp.textContent = isWeb ? 'URL for web scans' : 'Not needed — OS scans run locally';
+    if (!isWeb) targetEl.value = '';
+  });
+  targetTypeEl.dispatchEvent(new Event('change'));
+
+  // Fetch RPP scanner schemas
+  try {
+    const data = await ScannerAPI.listScanners();
+    const rppScanners = (data.categories?.RPP || []).filter(s =>
+      RPP_SCANNER_IDS.some(id => s.id === id || s.id.includes(id))
+    );
+
+    listEl.innerHTML = '';
+    if (rppScanners.length === 0) {
+      // Fallback: try individual endpoints
+      for (const id of RPP_SCANNER_IDS) {
+        try {
+          const schema = await ScannerAPI.getScannerSchema(id);
+          rppSchemas[id] = schema;
+          rppSelectedScanners.add(id);
+          listEl.appendChild(createScannerCard(schema, true));
+        } catch (e) {}
+      }
+    } else {
+      rppScanners.forEach(s => {
+        rppSchemas[s.id] = s;
+        rppSelectedScanners.add(s.id);
+        listEl.appendChild(createScannerCard(s, true));
+      });
+    }
+
+    if (listEl.children.length === 0) {
+      listEl.innerHTML = '<div class="muted" style="padding:20px">No RPP scanners found. Is the backend running?</div>';
+    }
+  } catch (e) {
+    listEl.innerHTML = `<div class="notice" style="border-color:var(--danger);color:var(--danger)">Failed to load scanners: ${e.message}</div>`;
+  }
+
+  function createScannerCard(scanner, checked) {
+    const label = document.createElement('label');
+    label.className = 'control' + (checked ? ' selected' : '');
+    label.innerHTML = `
+      <input type="checkbox" name="rpp_scanner" value="${scanner.id}" ${checked ? 'checked' : ''}>
+      <h3>${scanner.id.toUpperCase()} — ${scanner.name || scanner.id}</h3>
+      <p>${scanner.description || 'Password policy scanner'}</p>
+    `;
+    label.addEventListener('click', e => {
+      e.preventDefault();
+      const input = label.querySelector('input');
+      input.checked = !input.checked;
+      label.classList.toggle('selected', input.checked);
+      if (input.checked) rppSelectedScanners.add(scanner.id);
+      else rppSelectedScanners.delete(scanner.id);
+    });
+    return label;
+  }
+
+  // Form submit
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (rppSelectedScanners.size === 0) {
+      toast('Select at least one scanner');
+      return;
+    }
+
+    const targetType = targetTypeEl.value;
+    const target = targetEl.value.trim();
+
+    analysisEl.classList.add('show');
+    resultsEl.classList.remove('show');
+    resultsEl.innerHTML = '';
+    reportBtn.style.display = 'none';
+
+    const allResults = {};
+    const scannerIds = [...rppSelectedScanners];
+
+    for (let i = 0; i < scannerIds.length; i++) {
+      const id = scannerIds[i];
+      progressText.textContent = `Running ${id.toUpperCase()} (${i + 1}/${scannerIds.length})...`;
+      try {
+        const result = await ScannerAPI.runScan(id, {}, targetType, target || undefined);
+        allResults[id] = result;
+      } catch (err) {
+        allResults[id] = { error: err.message };
+      }
+    }
+
+    analysisEl.classList.remove('show');
+    rppLastResults = allResults;
+    renderBatchResults(resultsEl, allResults);
+    resultsEl.classList.add('show');
+    reportBtn.style.display = '';
+    toast('RPP assessment completed!');
+  });
+
+  // PDF report
+  reportBtn.addEventListener('click', async () => {
+    if (!rppLastResults) return;
+    try {
+      const rppTarget = document.querySelector('[name="target"]')?.value || document.querySelector('[name="ip_address"]')?.value || '';
+      await ScannerAPI.exportPdf(Object.values(rppLastResults), 'RPP Security Report', rppTarget, 'RPP - Password & Access Policy');
+      toast('PDF downloaded!');
+    } catch (e) {
+      toast('PDF export failed: ' + e.message);
+    }
+  });
+});
+</script>
+</body>
+</html>

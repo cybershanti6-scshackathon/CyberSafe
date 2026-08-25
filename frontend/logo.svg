@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0ea5c6"/>
+      <stop offset="100%" style="stop-color:#6c63ff"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.95"/>
+      <stop offset="100%" style="stop-color:#ffffff;stop-opacity:0.85"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f2740" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <!-- Rounded square background -->
+  <rect x="4" y="4" width="112" height="112" rx="28" fill="url(#bg)"/>
+  <!-- Shield shape -->
+  <path d="M60 18 L92 32 L92 58 C92 80 60 102 60 102 C60 102 28 80 28 58 L28 32 Z"
+        fill="url(#shield)" filter="url(#shadow)"/>
+  <!-- Lock body -->
+  <rect x="47" y="52" width="26" height="22" rx="4" fill="#0ea5c6"/>
+  <!-- Lock shackle -->
+  <path d="M52 52 L52 44 C52 38 68 38 68 44 L68 52" stroke="#0ea5c6" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <!-- Keyhole -->
+  <circle cx="60" cy="60" r="3" fill="#ffffff"/>
+  <rect x="59" y="60" width="2" height="5" rx="1" fill="#ffffff"/>
+</svg>

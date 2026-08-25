@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — CyberSure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0..200" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<div data-app>
+
+<div class="page">
+  <div class="page-head"><div><h1>CyberSure Dashboard</h1><p>Your cybersecurity overview.</p></div><div class="toolbar" style="display:flex;align-items:center;gap:16px"><div class="shield-scene shield-sm"><div class="shield"><div class="shield-body"></div><div class="shield-lock"><div class="shield-lock-shackle"></div><div class="shield-lock-body"><div class="shield-lock-hole"></div></div></div></div></div><a class="btn btn-primary" href="rpp.html"><span class="material-symbols-outlined">play_arrow</span>Start Assessment</a></div></div>
+  <section class="grid-4">
+    <div class="card score-card"><span class="muted">Total Scanners</span><div class="score" id="totalScanners">—</div><p class="muted" id="scannerCategories">Loading...</p></div>
+    <div class="card score-card"><span class="muted">System</span><div class="score" id="systemOS" style="font-size:22px">—</div><p class="muted" id="systemHostname">Detecting...</p></div>
+    <div class="card score-card"><span class="muted">Server Status</span><div class="score" id="serverStatus" style="color:var(--warning)">Checking</div><p class="muted" id="serverDetail">Connecting...</p></div>
+    <div class="card score-card"><span class="muted">Target Type</span><div class="score" id="targetType" style="font-size:20px">—</div><p class="muted">Auto-detected</p></div>
+  </section>
+  <section class="grid-2" style="margin-top:16px">
+    <div class="card"><h2 class="section-title" style="font-size:22px">Scanner Categories</h2><p class="section-subtitle">Registered scanner modules from the backend.</p>
+      <div id="categoryGrid" class="mock-grid" style="min-height:80px">
+        <div class="metric"><span class="muted">Loading...</span><div class="num">—</div></div>
+      </div>
+    </div>
+    <div class="card"><h2 class="section-title" style="font-size:22px">System Info</h2>
+      <div id="systemInfoPanel">
+        <div class="muted">Detecting system...</div>
+      </div>
+    </div>
+  </section>
+  <section class="card" style="margin-top:16px">
+    <h2 class="section-title" style="font-size:22px">Assessment Modules</h2>
+    <div class="grid-3">
+      <a class="card" href="rpp.html"><strong>RPP</strong><p class="muted" id="rppCount">Loading...</p></a>
+      <a class="card" href="nes.html"><strong>NES</strong><p class="muted" id="nesCount">Loading...</p></a>
+      <a class="card" href="devices-vendors.html"><strong>Devices & Vendors</strong><p class="muted" id="deviceCount">Loading...</p></a>
+      <a class="card" href="web-security.html"><strong>Web Security</strong><p class="muted" id="webCount">Loading...</p></a>
+    </div>
+  </section>
+</div>
+
+</div>
+<script src="/static/app.js"></script>
+<script src="/static/scanner.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    // Fetch system info
+    const sysInfo = await ScannerAPI.systemInfo();
+    document.getElementById('systemOS').textContent = sysInfo.os;
+    document.getElementById('systemHostname').textContent = sysInfo.hostname;
+    document.getElementById('targetType').textContent = sysInfo.recommended_target_type;
+    document.getElementById('systemInfoPanel').innerHTML = `
+      <div class="finding"><span class="severity low">OS</span><div><strong>${sysInfo.os}</strong><p class="muted">${sysInfo.hostname}</p></div></div>
+      <div class="finding"><span class="severity medium">Target</span><div><strong>${sysInfo.recommended_target_type}</strong><p class="muted">Recommended scanner type</p></div></div>
+    `;
+
+    // Fetch scanners
+    const data = await ScannerAPI.listScanners();
+    const cats = data.categories || {};
+    const total = data.total || 0;
+
+    document.getElementById('totalScanners').textContent = total;
+    document.getElementById('scannerCategories').textContent = Object.keys(cats).length + ' categories';
+    document.getElementById('serverStatus').textContent = 'Online';
+    document.getElementById('serverStatus').style.color = 'var(--success)';
+    document.getElementById('serverDetail').textContent = total + ' scanners registered';
+
+    // Render category grid
+    const grid = document.getElementById('categoryGrid');
+    grid.innerHTML = '';
+    Object.entries(cats).forEach(([cat, scanners]) => {
+      const div = document.createElement('div');
+      div.className = 'metric';
+      div.innerHTML = `<span class="muted">${cat}</span><div class="num">${scanners.length}</div><p class="muted" style="font-size:11px;margin-top:4px">${scanners.map(s => s.name.split('—')[0].trim()).join(', ')}</p>`;
+      grid.appendChild(div);
+    });
+
+    // Update module counts
+    const rpp = cats['RPP'] || [];
+    const nes = cats['NES'] || [];
+    const device = cats['DEVICE'] || cats['CISCO'] || cats['FORTINET'] || cats['JUNIPER'] || [];
+    const web = cats['WEB'] || [];
+    document.getElementById('rppCount').textContent = rpp.length + ' scanner' + (rpp.length !== 1 ? 's' : '') + ' — RPP.1 to RPP.4';
+    document.getElementById('nesCount').textContent = nes.length + ' scanner' + (nes.length !== 1 ? 's' : '') + ' — Network & email security';
+    document.getElementById('deviceCount').textContent = device.length + ' scanner' + (device.length !== 1 ? 's' : '') + ' — Multi-vendor compliance';
+    document.getElementById('webCount').textContent = web.length + ' scanner' + (web.length !== 1 ? 's' : '') + ' — Website security checks';
+
+  } catch (e) {
+    document.getElementById('serverStatus').textContent = 'Offline';
+    document.getElementById('serverStatus').style.color = 'var(--danger)';
+    document.getElementById('serverDetail').textContent = e.message;
+    document.getElementById('totalScanners').textContent = '—';
+    document.getElementById('scannerCategories').textContent = 'Server not reachable';
+  }
+});
+</script>
+
+</body>
+</html>

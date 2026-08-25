@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web Security — CyberSure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0..200" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<div data-app>
+
+<div class="page">
+  <div class="page-head"><div><h1>Web Security</h1><p>Analyze selected website security services and configurations.</p></div></div>
+  <div class="notice"><strong>Authorization:</strong> Only assess websites and infrastructure that you own or are explicitly authorized to test.</div>
+
+  <!-- Scanner selection -->
+  <div class="card" style="margin-top:16px;margin-bottom:16px">
+    <h2 class="section-title" style="font-size:22px">Select Web Security Scanners</h2>
+    <p class="section-subtitle">Choose which website security checks to run.</p>
+    <div id="webScannerList" class="control-grid" style="margin-top:12px">
+      <div class="muted" style="padding:20px">Loading scanners from backend...</div>
+    </div>
+  </div>
+
+  <form id="webForm" class="card">
+    <div class="form-grid">
+      <div class="field"><label>Target URL</label>
+        <input type="url" id="webTarget" name="target" placeholder="https://example.com" required>
+        <div class="muted" style="font-size:12px">Enter the website URL to scan</div>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:18px">
+      <button class="btn btn-primary" type="submit" id="webSubmit">
+        <span class="material-symbols-outlined">security</span> Run Web Security Scan
+      </button>
+      <button class="btn btn-secondary" type="button" id="webReport" style="display:none">
+        <span class="material-symbols-outlined">download</span> Download PDF Report
+      </button>
+    </div>
+  </form>
+
+  <div class="analysis" id="webAnalysis"><span class="spinner"></span><strong id="webProgressText">Initializing scanners...</strong></div>
+  <section class="results" id="webResults"></section>
+</div>
+
+</div>
+<script src="/static/app.js"></script>
+<script src="/static/scanner.js"></script>
+<script>
+let webSchemas = {};
+let webSelectedScanners = new Set();
+let webLastResults = null;
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const listEl = document.getElementById('webScannerList');
+  const form = document.getElementById('webForm');
+  const analysisEl = document.getElementById('webAnalysis');
+  const resultsEl = document.getElementById('webResults');
+  const progressText = document.getElementById('webProgressText');
+  const reportBtn = document.getElementById('webReport');    // Fetch WEB scanners
+    try {
+      const data = await ScannerAPI.listScanners();
+      // Look for 'Web Security' category (as registered in web1.py) and 'WEB' category
+      let webScanners = data.categories?.['Web Security'] || data.categories?.WEB || [];
+      // Also check for any scanner with 'web' in the ID
+      if (webScanners.length === 0) {
+        Object.values(data.categories || {}).flat().forEach(s => {
+          if (s.id && (s.id.toLowerCase().startsWith('web'))) {
+            webScanners.push(s);
+          }
+        });
+      }
+
+    listEl.innerHTML = '';
+    if (webScanners.length === 0) {
+      listEl.innerHTML = '<div class="muted" style="padding:20px">No web security scanners found. Is the backend running?</div>';
+    } else {
+      webScanners.forEach(s => {
+        webSchemas[s.id] = s;
+        webSelectedScanners.add(s.id);
+        const label = document.createElement('label');
+        label.className = 'control selected';
+        label.innerHTML = `
+          <input type="checkbox" name="web_scanner" value="${s.id}" checked>
+          <h3>${s.id.toUpperCase()} — ${s.name || s.id}</h3>
+          <p>${s.description || 'Web security scanner'}</p>
+        `;
+        label.addEventListener('click', e => {
+          e.preventDefault();
+          const input = label.querySelector('input');
+          input.checked = !input.checked;
+          label.classList.toggle('selected', input.checked);
+          if (input.checked) webSelectedScanners.add(s.id);
+          else webSelectedScanners.delete(s.id);
+        });
+        listEl.appendChild(label);
+      });
+    }
+  } catch (e) {
+    listEl.innerHTML = `<div class="notice" style="border-color:var(--danger);color:var(--danger)">Failed to load scanners: ${e.message}</div>`;
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (webSelectedScanners.size === 0) { toast('Select at least one scanner'); return; }
+
+    const target = document.getElementById('webTarget').value.trim();
+    if (!target) { toast('Enter a target URL'); return; }
+
+    analysisEl.classList.add('show');
+    resultsEl.classList.remove('show');
+    resultsEl.innerHTML = '';
+    reportBtn.style.display = 'none';
+
+    const allResults = {};
+    const ids = [...webSelectedScanners];
+
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      progressText.textContent = `Running ${id.toUpperCase()} (${i + 1}/${ids.length})...`;
+      try {
+        allResults[id] = await ScannerAPI.runScan(id, {}, 'web', target);
+      } catch (err) {
+        allResults[id] = { error: err.message };
+      }
+    }
+
+    analysisEl.classList.remove('show');
+    webLastResults = allResults;
+    renderBatchResults(resultsEl, allResults);
+    resultsEl.classList.add('show');
+    reportBtn.style.display = '';
+    toast('Web security assessment completed!');
+  });
+
+  reportBtn.addEventListener('click', async () => {
+    if (!webLastResults) return;
+    try {
+      const webTarget = document.querySelector('[name="target"]')?.value || document.querySelector('[name="domain"]')?.value || '';
+      await ScannerAPI.exportPdf(Object.values(webLastResults), 'Web Security Report', webTarget, 'Web Security');
+      toast('PDF downloaded!');
+    } catch (e) { toast('PDF export failed: ' + e.message); }
+  });
+});
+</script>
+</body>
+</html>
