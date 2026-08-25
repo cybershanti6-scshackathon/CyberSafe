@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RPP — CyberSure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0..200" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<div data-app>
+
+<div class="page">
+  <div class="page-head"><div><h1>RPP — Robust Password Policy</h1><p>Assess password and authentication security controls.</p></div></div>
+  <form id="rppForm" class="card">
+    <div class="form-grid">
+      <div class="field"><label>Website / System URL</label><input required type="url" placeholder="https://example.com"></div>
+      <div class="field"><label>Minimum Password Length</label><input required type="number" min="1" value="8"></div>
+      <div class="field"><label>Database</label><select required><option value="">Select database</option><option>MySQL</option><option>PostgreSQL</option><option>MongoDB</option><option>Microsoft SQL Server</option><option>Other</option></select></div>
+    </div>
+    <div style="margin-top:22px"><h2 class="section-title" style="font-size:21px">RPP Controls</h2><p class="section-subtitle">Select any controls to assess individually or together.</p></div>
+    <div class="control-grid">
+      <label class="control selected"><input type="checkbox" name="rpp" value="RPP.1" checked><h3>RPP.1 — Strong Password Policy</h3><p>Length, complexity, reuse and expiry.</p></label>
+      <label class="control"><input type="checkbox" name="rpp" value="RPP.2"><h3>RPP.2 — Account Lockout</h3><p>Failed attempts and lockout protection.</p></label>
+      <label class="control"><input type="checkbox" name="rpp" value="RPP.3"><h3>RPP.3 — MFA</h3><p>MFA for critical systems and accounts.</p></label>
+      <label class="control"><input type="checkbox" name="rpp" value="RPP.4"><h3>RPP.4 — Secure Password Storage</h3><p>Hashing and password storage security.</p></label>
+    </div>
+    <div class="actions"><button class="btn btn-primary" type="submit"><span class="material-symbols-outlined">security</span>Start RPP Assessment</button></div>
+  </form>
+  <div class="analysis" id="rppAnalysis"><span class="spinner"></span><strong>Analyzing selected RPP controls…</strong></div>
+  <section class="results" id="rppResults">
+    <div class="grid-4" style="margin-top:16px">
+      <div class="card"><span class="muted">Overall RPP Score</span><div class="score">84/100</div></div>
+      <div class="card"><span class="muted">RPP.1</span><div class="score">92</div></div>
+      <div class="card"><span class="muted">RPP.2</span><div class="score">78</div></div>
+      <div class="card"><span class="muted">RPP.3</span><div class="score">81</div></div>
+    </div>
+    <div class="card" style="margin-top:16px"><h2 class="section-title" style="font-size:22px">Findings & Recommendations</h2>
+      <div class="finding"><span class="severity high">HIGH</span><div><strong>RPP.3 — MFA coverage</strong><p class="muted">MFA should be enforced for administrative and critical access. Recommendation: require MFA for privileged and remote access.</p></div></div>
+      <div class="finding"><span class="severity medium">MEDIUM</span><div><strong>RPP.2 — Lockout policy</strong><p class="muted">Account lockout settings should be consistently enforced. Recommendation: use controlled thresholds and lockout duration.</p></div></div>
+    </div>
+    <div class="actions"><button class="btn btn-primary" id="rppReport" type="button">Download PDF Report</button><button class="btn btn-secondary" id="rppRerun" type="button">Run Assessment Again</button></div>
+  </section>
+</div>
+
+</div>
+<script src="app.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded",()=>{
+  document.querySelectorAll(".control").forEach(c=>{
+    c.addEventListener("click",e=>{
+      if(e.target.tagName!=="INPUT"){const input=c.querySelector("input");input.checked=!input.checked}
+      c.classList.toggle("selected",c.querySelector("input").checked);
+    });
+  });
+  initAssessment({formId:"rppForm",analysisId:"rppAnalysis",resultsId:"rppResults",reportBtnId:"rppReport",rerunId:"rppRerun",title:"RPP Security Report",reportText:"Robust Password Policy assessment. Overall score 84/100. Findings: MFA coverage and account lockout policy require review. Recommendations: enforce MFA for privileged and remote access; standardize lockout thresholds and duration."});
+});
+</script>
+</body>
+</html>

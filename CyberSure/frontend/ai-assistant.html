@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Assistant — CyberSure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0..200" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<div data-app>
+
+<div class="chat-shell">
+  <aside class="chat-history">
+    <button class="btn btn-primary" id="newChat" style="width:100%">+ New Conversation</button>
+    <h3 style="margin-top:22px">Conversation History</h3>
+    <div id="history"><div class="history-item">Cybersecurity overview</div><div class="history-item">RPP findings</div></div>
+  </aside>
+  <section class="chat-main">
+    <div class="page-head" style="padding:22px 30px;margin:0;border-bottom:1px solid var(--border)"><div><h1 style="font-size:31px">CyberSure AI Assistant</h1><p>Understand cybersecurity assessment results in simple language.</p></div></div>
+    <div class="chat-messages" id="chatMessages">
+      <div class="msg ai">Hello! I’m the CyberSure AI Assistant. I can explain assessment results, findings and recommendations.</div>
+      <div class="actions" id="suggestions">
+        <button class="btn btn-secondary btn-sm">Explain my overall NES score.</button>
+        <button class="btn btn-secondary btn-sm">What are my critical findings?</button>
+        <button class="btn btn-secondary btn-sm">Summarize my RPP results.</button>
+      </div>
+    </div>
+    <div class="chat-input"><input id="chatInput" placeholder="Ask about your cybersecurity assessment…"><button class="btn btn-primary" id="sendChat"><span class="material-symbols-outlined">send</span>Send</button></div>
+  </section>
+</div>
+
+</div>
+<script src="app.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded",()=>{
+  const input=document.getElementById("chatInput"), send=document.getElementById("sendChat"), messages=document.getElementById("chatMessages");
+  const sendMessage=(text)=>{
+    text=(text||input.value).trim(); if(!text)return;
+    const u=document.createElement("div");u.className="msg user";u.textContent=text;messages.appendChild(u);input.value="";
+    const typing=document.createElement("div");typing.className="msg ai";typing.textContent="Thinking…";messages.appendChild(typing);messages.scrollTop=messages.scrollHeight;
+    setTimeout(()=>{typing.textContent="Based on the current CyberSure demo results, prioritize critical and high-severity findings first. For RPP, strengthen MFA and account lockout. For NES, review email authentication and Wi-Fi security. For device compliance, address management access and centralized logging.";messages.scrollTop=messages.scrollHeight},800);
+  };
+  send.addEventListener("click",()=>sendMessage());
+  input.addEventListener("keydown",e=>{if(e.key==="Enter")sendMessage()});
+  document.querySelectorAll("#suggestions button").forEach(b=>b.addEventListener("click",()=>sendMessage(b.textContent)));
+  document.getElementById("newChat").addEventListener("click",()=>{messages.innerHTML='<div class="msg ai">New CyberSure conversation started. What would you like to understand?</div>';});
+});
+</script>
+</body>
+</html>
