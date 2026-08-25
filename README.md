@@ -107,6 +107,25 @@ python3 launch.py
 
 ---
 
+## 🚀 Deploy to Cloud (Free)
+
+### One-Click Deploy to Render
+
+1. Click the button below (after setting up Render account):
+   
+   [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+
+2. Connect your GitHub repo
+3. Deploy automatically!
+
+### Automatic Deployment (GitHub Actions)
+
+Every push to `main` auto-deploys! See [DEPLOYMENT.md](DEPLOYMENT.md) for setup guide.
+
+**Your live URL:** `https://cybersure.onrender.com`
+
+---
+
 ## 📄 License
 
 Internal project — CERT-In Compliance Scanner for MSMEs.
