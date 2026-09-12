@@ -1,0 +1,281 @@
+## ============================================================
+## Juniper Junos Sample Configuration
+## Features: hostname, SSH, VLANs, interfaces, ACL, NAT,
+##           OSPF, static routing, logging, NTP, QoS
+## ============================================================
+
+system {
+    host-name CORP-RTR-01;
+    domain-name corp.example.com;
+    time-zone UTC;
+    ssh {
+        root-login deny;
+        protocol-version v2;
+        max-sessions-per-connection 5;
+        connection-limit 10;
+        rate-limit 3;
+    }
+    login {
+        class admin {
+            idle-timeout 5;
+            permissions all;
+        }
+    }
+    services {
+        netconf {
+            ssh;
+        }
+    }
+    syslog {
+        host 10.0.10.100 {
+            any info;
+            structured-data;
+        }
+        file messages {
+            any notice;
+            archive size 100k files 5;
+        }
+        user * {
+            interactive-commands any;
+        }
+    }
+    ntp {
+        server 10.0.10.10 {
+            prefer;
+        }
+        server 10.0.10.11;
+    }
+}
+
+interfaces {
+    ge-0/0/0 {
+        unit 0 {
+            family inet {
+                address 203.0.113.1/24;
+            }
+        }
+        description UPLINK_TO_ISP;
+    }
+    ge-0/0/1 {
+        unit 0 {
+            family ethernet-switching {
+                interface-mode access;
+                vlan {
+                    members VLAN10;
+                }
+            }
+        }
+        description LAN_VLAN10_MANAGEMENT;
+    }
+    ge-0/0/2 {
+        unit 0 {
+            family ethernet-switching {
+                interface-mode access;
+                vlan {
+                    members VLAN20;
+                }
+            }
+        }
+        description LAN_VLAN20_SERVERS;
+    }
+    ge-0/0/3 {
+        unit 0 {
+            family ethernet-switching {
+                interface-mode trunk;
+                native-vlan-id 99;
+                vlan {
+                    members [VLAN10 VLAN20 VLAN30];
+                }
+            }
+        }
+        description TRUNK_TO_SWITCH;
+    }
+    vlan {
+        unit 10 {
+            family inet {
+                address 10.0.10.1/24;
+            }
+        }
+        unit 20 {
+            family inet {
+                address 10.0.20.1/24;
+            }
+        }
+        unit 30 {
+            family inet {
+                address 10.0.30.1/24;
+            }
+        }
+    }
+}
+
+vlans {
+    VLAN10 {
+        vlan-id 10;
+        description MANAGEMENT;
+    }
+    VLAN20 {
+        vlan-id 20;
+        description SERVERS;
+    }
+    VLAN30 {
+        vlan-id 30;
+        description USERS;
+    }
+    VLAN99 {
+        vlan-id 99;
+        description NATIVE;
+    }
+}
+
+routing-options {
+    static {
+        route 0.0.0.0/0 next-hop 203.0.113.254;
+        route 10.0.100.0/24 next-hop 10.0.10.254;
+    }
+    router-id 1.1.1.1;
+}
+
+protocols {
+    ospf {
+        area 0.0.0.0 {
+            interface vlan.10;
+            interface vlan.20;
+            interface vlan.30;
+            interface ge-0/0/0.0;
+        }
+    }
+}
+
+firewall {
+    family inet {
+        filter PERMIT_MANAGEMENT {
+            term allow-mgmt {
+                from {
+                    source-address {
+                        10.0.10.0/24;
+                    }
+                }
+                then accept;
+            }
+            term allow-ssh {
+                from {
+                    destination-address {
+                        10.0.20.10/32;
+                    }
+                    protocol tcp;
+                    destination-port 22;
+                }
+                then accept;
+            }
+            term default-deny {
+                then {
+                    count denied-traffic;
+                    log;
+                    drop;
+                }
+            }
+        }
+        filter RESTRICT_SERVERS {
+            term allow-https-web1 {
+                from {
+                    source-address {
+                        10.0.30.0/24;
+                    }
+                    destination-address {
+                        10.0.20.10/32;
+                    }
+                    protocol tcp;
+                    destination-port 443;
+                }
+                then accept;
+            }
+            term allow-https-web2 {
+                from {
+                    source-address {
+                        10.0.30.0/24;
+                    }
+                    destination-address {
+                        10.0.20.11/32;
+                    }
+                    protocol tcp;
+                    destination-port 443;
+                }
+                then accept;
+            }
+            term default-deny {
+                then {
+                    count denied-servers;
+                    log;
+                    drop;
+                }
+            }
+        }
+    }
+}
+
+security {
+    nat {
+        source {
+            rule-set SRC-NAT {
+                from zone trust;
+                to zone untrust;
+                rule NAT-RULE-1 {
+                    match {
+                        source-address {
+                            10.0.10.0/24;
+                            10.0.20.0/24;
+                            10.0.30.0/24;
+                        }
+                    }
+                    then {
+                        source-nat {
+                            interface;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+class-of-service {
+    forwarding-classes {
+        queue VOICE 0;
+        queue CRITICAL 1;
+    }
+    schedulers {
+        VOICE-SCHED {
+            transmit-rate percent 30;
+            priority strict-high;
+        }
+        CRITICAL-SCHED {
+            transmit-rate percent 40;
+            priority medium-high;
+        }
+        DEFAULT-SCHED {
+            transmit-rate rest;
+            priority low;
+        }
+    }
+    scheduler-maps {
+        WAN-MAP {
+            VOICE-CLASS VOICE-SCHED;
+            CRITICAL-CLASS CRITICAL-SCHED;
+            DEFAULT-CLASS DEFAULT-SCHED;
+        }
+    }
+    classifiers {
+        DSCP-CLASS {
+            dscp DSCP-CLASSIFIER {
+                46 VOICE;
+                26 CRITICAL;
+            }
+        }
+    }
+    traffic-control-profiles {
+        WAN-PROFILE {
+            scheduler-map WAN-MAP;
+        }
+    }
+}

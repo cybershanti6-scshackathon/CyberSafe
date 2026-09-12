@@ -1,0 +1,36 @@
+# NES.1 — Firewall & Open Port Assessment
+# =========================================
+# TCP-connect scan on sensitive ports. Open ports = security risk.
+
+nes1:
+  # Ports that should NEVER be internet-facing
+  dangerous_ports:
+    - 21    # FTP
+    - 23    # Telnet
+    - 3306  # MySQL
+    - 5432  # PostgreSQL
+    - 1433  # MSSQL
+    - 27017 # MongoDB
+    - 6379  # Redis
+    - 11211 # Memcached
+    - 5900  # VNC
+
+  # Ports that indicate high-risk exposure
+  high_risk_ports:
+    - 22    # SSH
+    - 3389  # RDP
+    - 1433  # MSSQL
+    - 3306  # MySQL
+    - 5432  # PostgreSQL
+
+  # Maximum number of open ports before flagging as critical
+  max_open_ports_warning: 3
+
+  # Scan timeout per port (seconds)
+  port_timeout: 2.0
+
+  # Maximum concurrent connections for thorough scans
+  max_concurrent: 50
+
+  # Rate limit (requests per second) to avoid IDS triggering
+  rate_limit_per_second: 50

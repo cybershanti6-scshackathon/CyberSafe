@@ -1,0 +1,29 @@
+# RPP.1 — Password Complexity & Expiry Policy
+# =============================================
+# Edit these values to change the compliance baseline for every engagement.
+# One YAML edit changes the threshold for all scanners.
+
+rpp1:
+  # Minimum password length (CERT-In: 8-12+)
+  min_length: 8
+
+  # Maximum password length (sanity cap)
+  max_length: 128
+
+  # Password expiry in days (CERT-In: ≤90)
+  # 0 = never expires (non-compliant)
+  max_password_age_days: 90
+
+  # Minimum password age in days (prevents rapid cycling)
+  # 0 = no restriction
+  min_password_age_days: 1
+
+  # Number of previous passwords to remember (CERT-In: ≥5)
+  password_history_count: 5
+
+  # Require complexity (uppercase, lowercase, digits, special chars)
+  require_complexity: true
+
+  # Compliance framework baseline
+  # Options: "internal", "iso27001", "pci_dss"
+  compliance_framework: "internal"

@@ -1,0 +1,48 @@
+# NES.3 — VPN / Remote Access Security
+# ======================================
+# Check for VPN portals and enforce security standards.
+
+nes3:
+  # VPN ports to scan
+  vpn_ports:
+    - 443    # SSL VPN / HTTPS
+    - 8443   # Alt HTTPS
+    - 1194   # OpenVPN
+    - 51820  # WireGuard
+    - 1723   # PPTP (insecure)
+    - 500    # IKEv2/IPSec
+    - 4500   # IKEv2/NAT-T
+
+  # Approved VPN protocols (pass check)
+  approved_protocols:
+    - "WireGuard"
+    - "OpenVPN"
+    - "IKEv2/IPSec"
+    - "IKEv2"
+
+  # Rejected VPN protocols (fail check)
+  rejected_protocols:
+    - "PPTP"
+
+  # Require MFA on VPN
+  require_mfa: true
+
+  # Require valid TLS certificate (not self-signed, not expired)
+  require_valid_cert: true
+
+  # Maximum days before cert expiry warning
+  cert_expiry_warning_days: 30
+
+  # Known vulnerable VPN versions (vendor -> version prefix -> CVEs)
+  vulnerable_versions:
+    Pulse Secure:
+      "9.0":
+        - "CVE-2019-11510"
+        - "CVE-2020-8260"
+      "9.1":
+        - "CVE-2020-8260"
+    Fortinet:
+      "6.2":
+        - "CVE-2018-13379"
+      "6.4":
+        - "CVE-2020-12812"

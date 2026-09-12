@@ -2,15 +2,25 @@
 RPP.4 — Password Encryption & Hashing
 ======================================
 CERT-In: Use secure encryption/hashing for password storage.
+
+Backend stack:
+  - Config-driven policy via config/rpp4_policy.yaml
+  - Safe subprocess wrapper (core/command_runner.py)
+  - Structured audit logging (core/audit_logger.py)
+  - ERROR is distinct from FAIL
 """
 
 import re
 from pathlib import Path
-from typing import List, Dict
+from typing import Any, Dict, List, Optional
 
 from msme_auditor.scanners.base import BaseScanner, ScanConfig, make_check, bool_check
 from msme_auditor.schemas.enums import SeverityLevel
 from msme_auditor.schemas.checks import SecurityCheck
+from msme_auditor.core.command_runner import run_command
+from msme_auditor.core.policy_loader import load_policy_for
+from msme_auditor.core.audit_logger import get_audit_logger, log_scan_event
+
 
 # Hash identification patterns
 HASH_PATTERNS = {
@@ -41,7 +51,9 @@ def identify_hash(hash_str: str) -> Dict:
             result["salted"] = "$" in hash_str and not is_plain
             result["secure"] = algo in SECURE_ALGOS
             break
-    if result["algorithm"] == "unknown" and len(hash_str) < 50 and not re.match(r"^[a-fA-F0-9]+$", hash_str):
+    if (result["algorithm"] == "unknown"
+            and len(hash_str) < 50
+            and not re.match(r"^[a-fA-F0-9]+$", hash_str)):
         result["algorithm"] = "plaintext"
     return result
 
@@ -69,55 +81,78 @@ class RPP4Scanner(BaseScanner):
         cfg = sc.config
         tt = sc.target_type
 
-        if tt == "linux":
-            hashes = self._scan_shadow()
-        elif tt == "web" and sc.target:
-            hashes = self._scan_web(sc.target)
-        elif "sample_hashes" in cfg:
-            hashes = [identify_hash(h) for h in cfg["sample_hashes"]]
-        else:
-            hashes = []
+        try:
+            policy = load_policy_for("rpp4")
+        except (FileNotFoundError, KeyError) as exc:
+            return [self._scan_error(f"Policy config error: {exc}")]
 
-        enc = cfg.get("encryption_at_rest", False) if tt == "manual" else False
+        audit_logger = get_audit_logger()
+        log_scan_event(audit_logger, self.scanner_id, sc.target or "localhost", "started")
 
-        return self._build_checks(hashes, enc)
+        try:
+            if tt == "linux":
+                hashes = self._scan_shadow()
+            elif tt == "web" and sc.target:
+                hashes = self._scan_web(sc.target)
+            elif "sample_hashes" in cfg:
+                hashes = [identify_hash(h) for h in cfg["sample_hashes"]]
+            else:
+                hashes = []
 
+            enc = cfg.get("encryption_at_rest", False) if tt == "manual" else False
+
+            result = self._build_checks(hashes, enc, policy)
+        except Exception as exc:
+            result = [self._scan_error(str(exc))]
+        finally:
+            log_scan_event(audit_logger, self.scanner_id, sc.target or "localhost", "completed")
+
+        return result
+
+    # =========================================================================
+    # Linux Shadow Scanner
+    # =========================================================================
     def _scan_shadow(self) -> List[Dict]:
         """Analyze ``/etc/shadow`` hash algorithms."""
         hashes = []
         shadow = Path("/etc/shadow")
         if shadow.exists():
             try:
-                for line in shadow.read_text().split("\n"):
+                for line in shadow.read_text(encoding="utf-8", errors="ignore").split("\n"):
                     parts = line.split(":")
                     if len(parts) >= 2 and parts[1]:
                         hashes.append(identify_hash(parts[1]))
-            except (PermissionError, Exception):
+            except (PermissionError, OSError):
                 pass
         return hashes
 
+    # =========================================================================
+    # Web Scanner
+    # =========================================================================
     def _scan_web(self, target: str) -> List[Dict]:
-        """
-        Probe web application for password storage evidence.
-
-        Tries multiple API endpoints for hash/password-storage info.
-        Returns empty list if no evidence found — never fakes data.
-        """
+        """Probe web application for password storage evidence."""
         import httpx
         from urllib.parse import urljoin
 
-        # Try structured API endpoints
+        TIMEOUT = 5
+        HEADERS = {
+            "User-Agent": "Mozilla/5.0 (compatible; CyberSure-SecurityScanner/1.0)",
+            "Accept": "text/html,application/json",
+        }
+
         api_endpoints = [
             "/api/security/password-storage",
             "/api/security/config",
             "/api/auth/config",
-            "/api/config",
+            "/api/config/security",
+            "/api/auth/password-policy",
         ]
 
         for endpoint in api_endpoints:
             try:
                 url = urljoin(target.rstrip("/"), endpoint)
-                resp = httpx.get(url, timeout=8, follow_redirects=True, verify=False)
+                resp = httpx.get(url, timeout=TIMEOUT, follow_redirects=False,
+                                 verify=False, headers=HEADERS)
                 if resp.status_code == 200:
                     try:
                         data = resp.json()
@@ -125,10 +160,15 @@ class RPP4Scanner(BaseScanner):
                             continue
                         if data.get("sample_hashes"):
                             return [identify_hash(h) for h in data["sample_hashes"]]
-                        elif data.get("algorithm"):
+                        if data.get("algorithm"):
                             return [{"algorithm": data["algorithm"],
                                      "salted": data.get("salted", False),
                                      "secure": data["algorithm"] in SECURE_ALGOS}]
+                        storage = data.get("password_storage") or data.get("hashing")
+                        if isinstance(storage, dict) and storage.get("algorithm"):
+                            return [{"algorithm": storage["algorithm"],
+                                     "salted": storage.get("salted", False),
+                                     "secure": storage["algorithm"] in SECURE_ALGOS}]
                     except Exception:
                         continue
             except Exception:
@@ -136,46 +176,81 @@ class RPP4Scanner(BaseScanner):
 
         return []
 
-    def _build_checks(self, hashes: List[Dict], enc: bool) -> List[SecurityCheck]:
-        """Build encryption / hashing checks from analysed hash data."""
+    # =========================================================================
+    # Check Builder — unified evaluation
+    # =========================================================================
+    def _build_checks(self, hashes: List[Dict], enc: bool, policy: dict) -> List[SecurityCheck]:
+        """Build encryption / hashing checks from analysed hash data against policy."""
+        approved = set(policy.get("approved_algorithms", []))
+        rejected = set(policy.get("rejected_algorithms", []))
+
         plaintext_count = sum(1 for h in hashes if h.get("algorithm") == "plaintext")
         algos = {h.get("algorithm") for h in hashes if h.get("algorithm")}
-        secure = algos & SECURE_ALGOS
-        weak = algos & WEAK_ALGOS
+        secure = algos & (SECURE_ALGOS | approved)
+        weak = algos & (WEAK_ALGOS | rejected)
         unsalted = sum(1 for h in hashes if not h.get("salted", True))
 
-        return [
-            make_check("no_plaintext", "No Plaintext Passwords", plaintext_count == 0,
-                       "0 plaintext passwords", f"{plaintext_count} plaintext found",
-                       SeverityLevel.CRITICAL,
-                       "IMMEDIATE: Hash all plaintext passwords with bcrypt/Argon2"),
-            make_check("hash_algorithm", "Secure Hash Algorithm", bool(secure) and not weak,
-                       "bcrypt, Argon2, or scrypt", f"Found: {', '.join(algos)} or none",
-                       SeverityLevel.CRITICAL,
-                       "Use: bcrypt (cost>=10), Argon2id, or scrypt"),
-            make_check("salting", "Password Salting", unsalted == 0,
-                       "All passwords salted", f"{unsalted} unsalted",
-                       SeverityLevel.HIGH,
-                       "bcrypt/Argon2 auto-salt. For SHA: salt=pbkdf2_hmac(...)"),
-            make_check("no_weak", "No Weak Hash Algorithms", not weak,
-                       "No MD5, SHA1, or unsalted hashes",
-                       f"{len(weak)} weak found" if weak else "None",
-                       SeverityLevel.CRITICAL,
-                       "CRITICAL: MD5/SHA1 crackable in seconds\nMigrate to bcrypt/Argon2"),
-            bool_check("encryption_at_rest", "Database Encryption at Rest", enc,
-                       "Enabled (TDE or volume encryption)", SeverityLevel.HIGH,
-                       "MySQL: ENCRYPTION='Y'\nPostgreSQL: pgcrypto\nSQL Server: TDE"),
-        ]
+        checks: List[SecurityCheck] = []
 
-    def _fail(self, err: str) -> List[SecurityCheck]:
-        """Return a clear scan-failure indication — never fake default values."""
-        return [
-            make_check(
-                "scan_error", "RPP.4 Scan Error",
-                False,
-                "Successful scan execution",
-                f"Scan failed: {err}",
-                SeverityLevel.HIGH,
-                f"Manual audit required. Error: {err}",
-            ),
-        ]
+        # Check 1: No plaintext passwords
+        checks.append(make_check(
+            "no_plaintext", "No Plaintext Passwords",
+            plaintext_count == 0,
+            "0 plaintext passwords",
+            f"{plaintext_count} plaintext found" if plaintext_count else "None found",
+            SeverityLevel.CRITICAL,
+            "IMMEDIATE: Hash all plaintext passwords with bcrypt/Argon2",
+        ))
+
+        # Check 2: Secure hash algorithm
+        checks.append(make_check(
+            "hash_algorithm", "Secure Hash Algorithm",
+            bool(secure) and not weak,
+            f"Approved: {', '.join(sorted(approved))}" if approved else "bcrypt, Argon2, or scrypt",
+            f"Found: {', '.join(sorted(algos))}" if algos else "No hashes to analyze",
+            SeverityLevel.CRITICAL,
+            f"Use: {', '.join(sorted(approved)[:3])}" if approved else "Use: bcrypt (cost>=10), Argon2id, or scrypt",
+        ))
+
+        # Check 3: Password salting
+        checks.append(make_check(
+            "salting", "Password Salting",
+            unsalted == 0,
+            "All passwords salted",
+            f"{unsalted} unsalted" if unsalted else "All salted",
+            SeverityLevel.HIGH,
+            "bcrypt/Argon2 auto-salt. For SHA: salt=pbkdf2_hmac(...)",
+        ))
+
+        # Check 4: No weak algorithms
+        checks.append(make_check(
+            "no_weak", "No Weak Hash Algorithms",
+            not weak,
+            "No MD5, SHA1, or unsalted hashes",
+            f"{len(weak)} weak found: {', '.join(sorted(weak))}" if weak else "None",
+            SeverityLevel.CRITICAL,
+            "CRITICAL: MD5/SHA1 crackable in seconds\nMigrate to bcrypt/Argon2",
+        ))
+
+        # Check 5: Encryption at rest
+        checks.append(bool_check(
+            "encryption_at_rest", "Database Encryption at Rest", enc,
+            "Enabled (TDE or volume encryption)", SeverityLevel.HIGH,
+            "MySQL: ENCRYPTION='Y'\nPostgreSQL: pgcrypto\nSQL Server: TDE",
+        ))
+
+        return checks
+
+    # =========================================================================
+    # Helpers
+    # =========================================================================
+    def _scan_error(self, message: str) -> SecurityCheck:
+        """Return a scan-error check — never fake pass/fail."""
+        return make_check(
+            "scan_error", "RPP.4 Scan Error",
+            False,
+            "Successful scan execution",
+            f"Scan failed: {message}",
+            SeverityLevel.HIGH,
+            f"Manual audit required. Error: {message}",
+        )

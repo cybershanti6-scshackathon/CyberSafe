@@ -15,15 +15,17 @@ POST /api/scan-all           Run every registered scanner
 POST /api/audit              Full audit → unified AuditReport JSON
 """
 
+import ipaddress
 import platform
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from msme_auditor.scanners.registry import (
     discover_scanners,
@@ -33,6 +35,7 @@ from msme_auditor.scanners.registry import (
     scanner_to_api_schema,
     run_scan,
 )
+
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +82,32 @@ class ScanRequest(BaseModel):
         default=None,
         description="Override scan target (URL, IP, domain)",
     )
+    dry_run: bool = Field(
+        default=True,
+        description="If True, no live requests are sent (web scans only)",
+    )
+
+    @field_validator("target")
+    @classmethod
+    def block_internal_targets(cls, v: Optional[str], info) -> Optional[str]:
+        """Block private/loopback targets for web scans to prevent SSRF."""
+        if not v:
+            return v
+        try:
+            parsed = urlparse(v if "://" in v else f"https://{v}")
+            host = parsed.hostname
+            if host:
+                ip = ipaddress.ip_address(host)
+                if ip.is_private or ip.is_loopback:
+                    raise ValueError(
+                        "Private/loopback targets require authorization file entry. "
+                        "Add the target to config/authorized_targets.json."
+                    )
+        except ValueError:
+            raise
+        except Exception:
+            pass  # hostname, not raw IP — fine
+        return v
 
 
 class AuditRequest(BaseModel):
@@ -179,6 +208,50 @@ def list_scanners() -> Dict[str, Any]:
     for cat, scanners in by_cat.items():
         result[cat] = [scanner_to_api_schema(s) for s in scanners]
     return {"categories": result, "total": len(get_all_scanners())}
+
+
+
+
+# ---------------------------------------------------------------------------
+# Configuration Converter API
+# ---------------------------------------------------------------------------
+
+class ConvertRequest(BaseModel):
+    """Request body for configuration conversion."""
+    config_text: str = Field(..., description="Raw vendor configuration text")
+    source_vendor: str = Field(..., description="Source vendor (cisco, juniper, fortinet)")
+    target_vendor: str = Field(..., description="Target vendor (cisco, juniper, fortinet)")
+
+
+@app.get("/api/converter/pairs")
+def api_converter_pairs() -> List[Dict[str, Any]]:
+    """Get supported vendor conversion pairs."""
+    from msme_auditor.config_parsers.config_converter import get_supported_pairs
+    return get_supported_pairs()
+
+
+@app.post("/api/converter/convert")
+def api_convert_config(req: ConvertRequest) -> Dict[str, Any]:
+    """
+    Convert configuration between vendors.
+    
+    Tier 1: Fully automated (hostname, SSH, VLANs, interfaces, routes, OSPF, logging, NTP)
+    Tier 2: AI-assisted draft + flagged for review (ACLs, NAT)
+    Tier 3: Not supported (QoS)
+    """
+    from msme_auditor.config_parsers.config_converter import convert_config
+    
+    try:
+        result = convert_config(
+            source_vendor=req.source_vendor,
+            target_vendor=req.target_vendor,
+            config_text=req.config_text,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Conversion failed: {str(exc)}")
 
 
 @app.get("/api/scanners/{scanner_id}")

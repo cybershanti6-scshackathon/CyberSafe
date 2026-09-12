@@ -86,6 +86,8 @@ def discover_scanners() -> None:
         "msme_auditor.scanners.nes.nes3",
         "msme_auditor.scanners.nes.nes4",
         "msme_auditor.scanners.web.web1",
+        "msme_auditor.scanners.web.web2",
+        "msme_auditor.scanners.web.web3",
     ]
 
     for mod_name in _scanner_modules:

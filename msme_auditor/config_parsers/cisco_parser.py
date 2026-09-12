@@ -61,6 +61,8 @@ class CiscoParser(BaseConfigParser):
         "aaa_new_model": re.compile(r"^aaa\s+new-model", re.IGNORECASE),
         "aaa_authentication_login": re.compile(r"^aaa\s+authentication\s+login\s+", re.IGNORECASE),
         "aaa_authentication_enable": re.compile(r"^aaa\s+authentication\s+enable\s+", re.IGNORECASE),
+        "aaa_authorization": re.compile(r"^aaa\s+authorization\s+", re.IGNORECASE),
+        "aaa_accounting": re.compile(r"^aaa\s+accounting\s+", re.IGNORECASE),
 
         # Password policy (IOS-XE / newer)
         "security_passwords_min_length": re.compile(r"^security\s+passwords\s+min-length\s+(\d+)", re.IGNORECASE),
@@ -68,6 +70,42 @@ class CiscoParser(BaseConfigParser):
         "security_passwords_history": re.compile(r"^security\s+passwords\s+history\s+(\d+)", re.IGNORECASE),
         "security_passwords_aging": re.compile(r"^security\s+passwords\s+aging\s+(\d+)", re.IGNORECASE),
         "security_passwords_lockout": re.compile(r"^security\s+passwords\s+lockout\s+(\d+)", re.IGNORECASE),
+
+        # TACACS+ / RADIUS
+        "tacacs_server": re.compile(r"^tacacs-server\s+host\s+(\S+)", re.IGNORECASE),
+        "tacacs_key": re.compile(r"^tacacs-server\s+key\s+(?:[\d]+\s+)?(\S+)", re.IGNORECASE),
+        "radius_server": re.compile(r"^radius-server\s+host\s+(\S+)", re.IGNORECASE),
+        "radius_key": re.compile(r"^radius-server\s+key\s+(?:[\d]+\s+)?(\S+)", re.IGNORECASE),
+
+        # ACL / Access Control
+        "ip_access_list_standard": re.compile(r"^ip\s+access-list\s+standard\s+(\S+)", re.IGNORECASE),
+        "ip_access_list_extended": re.compile(r"^ip\s+access-list\s+extended\s+(\S+)", re.IGNORECASE),
+        "access_list_deny": re.compile(r"^\s*(deny|permit)\s+", re.IGNORECASE),
+
+        # Switchport Security (IOS)
+        "switchport_mode_access": re.compile(r"^switchport\s+mode\s+access", re.IGNORECASE),
+        "switchport_portsecurity": re.compile(r"^switchport\s+port-security", re.IGNORECASE),
+        "switchport_portsecurity_max": re.compile(r"^switchport\s+port-security\s+maximum\s+(\d+)", re.IGNORECASE),
+        "switchport_portsecurity_violation": re.compile(r"^switchport\s+port-security\s+violation\s+(\S+)", re.IGNORECASE),
+        "switchport_portsecurity_mac": re.compile(r"^switchport\s+port-security\s+mac-address\s+(\S+)", re.IGNORECASE),
+
+        # VLAN Security
+        "vlan_name": re.compile(r"^vlan\s+(\d+)", re.IGNORECASE),
+        "native_vlan": re.compile(r"^switchport\s+trunk\s+native\s+vlan\s+(\d+)", re.IGNORECASE),
+        "allowed_vlan": re.compile(r"^switchport\s+trunk\s+allowed\s+vlan\s+(\S+)", re.IGNORECASE),
+
+        # IPSEC / VPN
+        "crypto_isakmp": re.compile(r"^crypto\s+isakmp\s+", re.IGNORECASE),
+        "crypto_ipsec": re.compile(r"^crypto\s+ipsec\s+", re.IGNORECASE),
+        "crypto_map": re.compile(r"^crypto\s+map\s+", re.IGNORECASE),
+
+        # NTP Authentication
+        "ntp_authentication": re.compile(r"^ntp\s+authentication-key\s+", re.IGNORECASE),
+        "ntp_trusted_key": re.compile(r"^ntp\s+trusted-key\s+", re.IGNORECASE),
+
+        # SNMPv3
+        "snmpv3_user": re.compile(r"^snmp-server\s+group\s+", re.IGNORECASE),
+        "snmpv3_auth": re.compile(r"^snmp-server\s+user\s+", re.IGNORECASE),
 
         # Line configuration (console, vty, aux)
         "line_console": re.compile(r"^line\s+console\s+(\d+)", re.IGNORECASE),
@@ -249,6 +287,66 @@ class CiscoParser(BaseConfigParser):
             config.device.hostname = m.group(1)
             matched = True
 
+        # Username commands (various formats)
+        if self.PATTERNS["username"].search(line):
+            matched = True
+        if self.PATTERNS["username_secret"].search(line):
+            matched = True
+        if self.PATTERNS["username_password"].search(line):
+            matched = True
+
+        # AAA authentication / authorization / accounting
+        if self.PATTERNS["aaa_authentication_login"].search(line):
+            matched = True
+        if self.PATTERNS["aaa_authentication_enable"].search(line):
+            matched = True
+
+        # TACACS+ / RADIUS (already handled in main pattern block)
+
+        # ACL commands
+        if self.PATTERNS["ip_access_list_standard"].search(line) or self.PATTERNS["ip_access_list_extended"].search(line):
+            matched = True
+
+        # Switchport commands
+        if self.PATTERNS["switchport_mode_access"].search(line):
+            matched = True
+        if self.PATTERNS["switchport_portsecurity"].search(line):
+            matched = True
+        if self.PATTERNS["switchport_portsecurity_max"].search(line):
+            matched = True
+        if self.PATTERNS["switchport_portsecurity_violation"].search(line):
+            matched = True
+        if self.PATTERNS["switchport_portsecurity_mac"].search(line):
+            matched = True
+
+        # VLAN commands
+        if self.PATTERNS["vlan_name"].search(line):
+            matched = True
+        if self.PATTERNS["native_vlan"].search(line):
+            matched = True
+        if self.PATTERNS["allowed_vlan"].search(line):
+            matched = True
+
+        # Crypto / VPN
+        if self.PATTERNS["crypto_isakmp"].search(line):
+            matched = True
+        if self.PATTERNS["crypto_ipsec"].search(line):
+            matched = True
+        if self.PATTERNS["crypto_map"].search(line):
+            matched = True
+
+        # NTP authentication
+        if self.PATTERNS["ntp_authentication"].search(line):
+            matched = True
+        if self.PATTERNS["ntp_trusted_key"].search(line):
+            matched = True
+
+        # SNMPv3
+        if self.PATTERNS["snmpv3_user"].search(line):
+            matched = True
+        if self.PATTERNS["snmpv3_auth"].search(line):
+            matched = True
+
         # Password encryption
         if self.PATTERNS["service_password_encryption"].search(line):
             self._set_with_evidence(config, "authentication", "password_encryption_enabled", True, raw_line, line_num)
@@ -345,6 +443,103 @@ class CiscoParser(BaseConfigParser):
         if line.startswith("line ") or line.startswith("interface ") or line == "end" or line.startswith("banner "):
             matched = True
 
+        # Additional common commands that should be recognized
+        if line.startswith("description "):
+            matched = True
+        if line.startswith("ip address ") or line.startswith("no ip address"):
+            matched = True
+        if line.startswith("ip route "):
+            matched = True
+        if line.startswith("router "):
+            matched = True
+        if line.startswith("network "):
+            matched = True
+        if line.startswith("passive-interface "):
+            matched = True
+        if line.startswith("redistribute "):
+            matched = True
+        if line.startswith("default-information "):
+            matched = True
+        if line.startswith("neighbor "):
+            matched = True
+        if line.startswith("address-family "):
+            matched = True
+        if line.startswith("vlan "):
+            matched = True
+        if line.startswith("name-server "):
+            matched = True
+        if line.startswith("ip name-server "):
+            matched = True
+        if line.startswith("domain lookup"):
+            matched = True
+        if line.startswith("no ip domain-lookup"):
+            matched = True
+        if line.startswith("ip domain lookup"):
+            matched = True
+        if line.startswith("clock "):
+            matched = True
+        if line.startswith("alias "):
+            matched = True
+        if line.startswith("macro "):
+            matched = True
+        if line.startswith("spanning-tree "):
+            matched = True
+        if line.startswith("dot1x "):
+            matched = True
+        if line.startswith("authentication "):
+            matched = True
+        if line.startswith("ip arp "):
+            matched = True
+        if line.startswith("icmp "):
+            matched = True
+        if line.startswith("track "):
+            matched = True
+        if line.startswith("event "):
+            matched = True
+        if line.startswith("timer "):
+            matched = True
+        # SSH timeout
+        if line.startswith("ip ssh time-out "):
+            self._set_with_evidence(config, "network", "ssh_enabled", True, raw_line, line_num)
+            matched = True
+        # Logging trap level
+        if line.startswith("logging trap "):
+            self._set_with_evidence(config, "logging", "logging_enabled", True, raw_line, line_num)
+            matched = True
+        # Logging source-interface
+        if line.startswith("logging source-interface "):
+            self._set_with_evidence(config, "logging", "logging_enabled", True, raw_line, line_num)
+            matched = True
+        # SNMP contact/location/traps
+        if line.startswith("snmp-server contact ") or line.startswith("snmp-server location "):
+            self._set_with_evidence(config, "network", "snmp_enabled", True, raw_line, line_num)
+            matched = True
+        if line.startswith("snmp-server enable traps"):
+            self._set_with_evidence(config, "network", "snmp_enabled", True, raw_line, line_num)
+            matched = True
+        # HTTP authentication
+        if line.startswith("ip http authentication "):
+            matched = True
+        # Interface commands
+        if line == "shutdown" or line == "no shutdown":
+            matched = True
+        if line == "no ip address":
+            matched = True
+        # ACL permit/deny rules
+        if line.startswith("permit ") or line.startswith("deny "):
+            matched = True
+        # Banner content lines (between delimiters)
+        if line.startswith("^") and len(line) <= 3:
+            matched = True
+        # Interface description and other interface commands
+        if self._current_section == "interface" or (line_idx > 0 and any(all_lines[j].strip().startswith("interface ") for j in range(max(0, line_idx-5), line_idx))):
+            if line.startswith("ip address ") or line.startswith("no ip address"):
+                matched = True
+            if line == "shutdown" or line == "no shutdown":
+                matched = True
+            if line.startswith("description "):
+                matched = True
+
         # Logging
         if self.PATTERNS["logging_on"].search(line):
             self._set_with_evidence(config, "logging", "logging_enabled", True, raw_line, line_num)
@@ -419,6 +614,65 @@ class CiscoParser(BaseConfigParser):
         # Banner
         if self.PATTERNS["banner_login_present"].search(line) or self.PATTERNS["banner_motd_present"].search(line):
             self._set_with_evidence(config, "access_control", "banner_configured", True, raw_line, line_num)
+            matched = True
+
+        # TACACS+ / RADIUS
+        if self.PATTERNS["tacacs_server"].search(line) or self.PATTERNS["tacacs_key"].search(line):
+            self._set_with_evidence(config, "network", "tacacs_configured", True, raw_line, line_num)
+            matched = True
+        if self.PATTERNS["radius_server"].search(line) or self.PATTERNS["radius_key"].search(line):
+            self._set_with_evidence(config, "network", "radius_configured", True, raw_line, line_num)
+            matched = True
+
+        # AAA Authorization / Accounting
+        if self.PATTERNS["aaa_authorization"].search(line):
+            self._set_with_evidence(config, "network", "aaa_authorization_enabled", True, raw_line, line_num)
+            matched = True
+        if self.PATTERNS["aaa_accounting"].search(line):
+            self._set_with_evidence(config, "logging", "aaa_accounting_enabled", True, raw_line, line_num)
+            matched = True
+
+        # ACLs
+        if self.PATTERNS["ip_access_list_standard"].search(line) or self.PATTERNS["ip_access_list_extended"].search(line):
+            self._set_with_evidence(config, "network", "acl_configured", True, raw_line, line_num)
+            matched = True
+
+        # Switchport Security
+        if self.PATTERNS["switchport_mode_access"].search(line):
+            self._set_with_evidence(config, "network", "switchport_access_mode", True, raw_line, line_num)
+            matched = True
+        if self.PATTERNS["switchport_portsecurity"].search(line):
+            self._set_with_evidence(config, "network", "port_security_enabled", True, raw_line, line_num)
+            matched = True
+        if m := self.PATTERNS["switchport_portsecurity_max"].search(line):
+            self._set_with_evidence(config, "network", "port_security_max_mac", int(m.group(1)), raw_line, line_num)
+            matched = True
+        if m := self.PATTERNS["switchport_portsecurity_violation"].search(line):
+            violation = m.group(1).lower()
+            self._set_with_evidence(config, "network", "port_security_violation", violation, raw_line, line_num)
+            matched = True
+
+        # VLAN Security
+        if m := self.PATTERNS["native_vlan"].search(line):
+            vlan = int(m.group(1))
+            is_default = vlan == 1
+            self._set_with_evidence(config, "network", "native_vlan", vlan, raw_line, line_num)
+            self._set_with_evidence(config, "network", "native_vlan_default", is_default, raw_line, line_num)
+            matched = True
+
+        # IPSEC / VPN
+        if self.PATTERNS["crypto_isakmp"].search(line) or self.PATTERNS["crypto_ipsec"].search(line):
+            self._set_with_evidence(config, "network", "ipsec_configured", True, raw_line, line_num)
+            matched = True
+
+        # NTP Authentication
+        if self.PATTERNS["ntp_authentication"].search(line) or self.PATTERNS["ntp_trusted_key"].search(line):
+            self._set_with_evidence(config, "encryption", "ntp_auth_enabled", True, raw_line, line_num)
+            matched = True
+
+        # SNMPv3 (more secure than community strings)
+        if self.PATTERNS["snmpv3_user"].search(line) or self.PATTERNS["snmpv3_auth"].search(line):
+            self._set_with_evidence(config, "network", "snmpv3_configured", True, raw_line, line_num)
             matched = True
 
         # Unused ports (interface shutdown)

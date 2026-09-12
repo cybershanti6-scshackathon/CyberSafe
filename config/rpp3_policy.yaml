@@ -1,0 +1,24 @@
+# RPP.3 — Multi-Factor Authentication
+# =====================================
+# CERT-In: Enable MFA for all critical systems, admin accounts, and remote access.
+
+rpp3:
+  # MFA required for admin accounts
+  admin_mfa_enabled: true
+
+  # MFA required for SSH/RDP/VPN
+  remote_mfa_enabled: true
+
+  # MFA required for databases, payment, customer data
+  critical_mfa_enabled: true
+
+  # Approved MFA methods (strongest first)
+  # Options: "FIDO2", "TOTP", "Hardware Key", "Biometric", "Smart Card", "SMS"
+  approved_methods:
+    - "FIDO2"
+    - "TOTP"
+    - "Hardware Key"
+    - "Biometric"
+
+  # MFA policy must be documented
+  policy_documented: true

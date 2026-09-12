@@ -1,0 +1,31 @@
+# RPP.4 — Password Encryption & Hashing
+# =======================================
+# CERT-In: Use secure encryption/hashing for password storage.
+
+rpp4:
+  # Approved hashing algorithms (in order of preference)
+  approved_algorithms:
+    - "argon2id"
+    - "argon2i"
+    - "bcrypt"
+    - "scrypt"
+    - "sha512_crypt"
+
+  # Bcrypt minimum cost factor
+  bcrypt_min_cost: 10
+
+  # Minimum password hash length (for manual input validation)
+  min_hash_length: 20
+
+  # Require salting for all hashes
+  require_salted: true
+
+  # Reject these algorithms as insecure
+  rejected_algorithms:
+    - "md5_crypt"
+    - "md5_plain"
+    - "sha1_plain"
+    - "sha256_plain"
+
+  # Require database encryption at rest
+  require_encryption_at_rest: true

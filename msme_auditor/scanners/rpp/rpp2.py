@@ -3,17 +3,26 @@ RPP.2 — Account Lockout Policy
 ===============================
 CERT-In: Temporarily lock accounts after 3–5 failed login attempts to
 prevent brute-force attacks.
+
+Backend stack:
+  - Config-driven policy via config/rpp2_policy.yaml
+  - Safe subprocess wrapper (core/command_runner.py)
+  - Structured audit logging (core/audit_logger.py)
+  - ERROR is distinct from FAIL
 """
 
 import re
-import subprocess
 import tempfile
+import uuid
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from msme_auditor.scanners.base import BaseScanner, ScanConfig, make_check
 from msme_auditor.schemas.enums import SeverityLevel
 from msme_auditor.schemas.checks import SecurityCheck
+from msme_auditor.core.command_runner import run_command
+from msme_auditor.core.policy_loader import load_policy_for
+from msme_auditor.core.audit_logger import get_audit_logger, log_scan_event
 
 
 class RPP2Scanner(BaseScanner):
@@ -48,66 +57,103 @@ class RPP2Scanner(BaseScanner):
         cfg = sc.config
         tt = sc.target_type
 
-        if tt == "windows":
-            return self._scan_windows()
-        elif tt == "linux":
-            return self._scan_linux()
-        elif tt == "web" and sc.target:
-            return self._scan_web(sc.target)
-        else:
-            return self._scan_config(cfg)
-
-    def _scan_windows(self) -> List[SecurityCheck]:
-        """Scan Windows lockout policy via ``net accounts`` + ``secedit``."""
         try:
-            out = subprocess.run(["net", "accounts"], capture_output=True, text=True, timeout=10).stdout
-            threshold = duration = window = 0
-            for line in out.split("\n"):
-                if "Lockout threshold" in line:
-                    m = re.search(r"(\d+)", line)
-                    if m:
-                        threshold = int(m.group(1))
-                elif "Lockout duration" in line:
-                    m = re.search(r"(\d+)", line)
-                    if m:
-                        duration = int(m.group(1))
-                elif "Lockout observation window" in line or "lockout window" in line.lower():
-                    m = re.search(r"(\d+)", line)
-                    if m:
-                        window = int(m.group(1))
+            policy = load_policy_for("rpp2")
+        except (FileNotFoundError, KeyError) as exc:
+            return [self._scan_error(f"Policy config error: {exc}")]
 
-            with tempfile.NamedTemporaryFile(suffix=".cfg", delete=False) as f:
-                cfg = Path(f.name)
-            try:
-                subprocess.run(["secedit", "/export", "/cfg", str(cfg), "/quiet"],
-                               capture_output=True, text=True, timeout=15)
-                if cfg.exists():
-                    content = cfg.read_text(encoding="utf-16-le", errors="ignore")
-                    for key, val in re.findall(r"(\w+)\s*=\s*(\d+)", content):
-                        if key == "LockoutThreshold":
-                            threshold = int(val)
-                        elif key == "LockoutDuration":
-                            duration = int(val) // 60
-                        elif key == "ResetLockoutCount":
-                            window = int(val) // 60
-            finally:
-                cfg.unlink(missing_ok=True)
+        audit_logger = get_audit_logger()
+        log_scan_event(audit_logger, self.scanner_id, sc.target or "localhost", "started")
 
-            return self._build_checks(threshold, duration, window, True, True)
-        except Exception as e:
-            return self._fail(str(e))
+        try:
+            if tt == "windows":
+                result = self._scan_windows(policy)
+            elif tt == "linux":
+                result = self._scan_linux(policy)
+            elif tt == "web" and sc.target:
+                result = self._scan_web(sc.target, policy)
+            else:
+                result = self._scan_config(cfg, policy)
+        except Exception as exc:
+            result = [self._scan_error(str(exc))]
+        finally:
+            log_scan_event(audit_logger, self.scanner_id, sc.target or "localhost", "completed")
 
-    def _scan_linux(self) -> List[SecurityCheck]:
+        return result
+
+    # =========================================================================
+    # Windows Scanner
+    # =========================================================================
+    def _scan_windows(self, policy: dict) -> List[SecurityCheck]:
+        """Scan Windows lockout policy via ``net accounts`` + ``secedit``."""
+        result = run_command(["net", "accounts"])
+        if not result.success:
+            return [self._scan_error(f"Could not query lockout policy: {result.error or result.stderr}")]
+
+        threshold = duration = window = 0
+
+        for line in result.stdout.split("\n"):
+            if "Lockout threshold" in line:
+                m = re.search(r"(\d+)", line)
+                if m:
+                    threshold = int(m.group(1))
+            elif "Lockout duration" in line:
+                m = re.search(r"(\d+)", line)
+                if m:
+                    duration = int(m.group(1))
+            elif "Lockout observation window" in line or "lockout window" in line.lower():
+                m = re.search(r"(\d+)", line)
+                if m:
+                    window = int(m.group(1))
+
+        # Also try secedit for more precise values
+        secpol_result = self._check_windows_lockout_secedit()
+        if secpol_result:
+            threshold = secpol_result.get("threshold", threshold)
+            duration = secpol_result.get("duration", duration)
+            window = secpol_result.get("window", window)
+
+        return self._build_checks(threshold, duration, window, True, True, policy)
+
+    def _check_windows_lockout_secedit(self) -> Optional[dict]:
+        """Extract lockout values from secedit export."""
+        tmp = Path(tempfile.gettempdir()) / f"rpp2_secpol_{uuid.uuid4().hex[:8]}.cfg"
+        try:
+            result = run_command(["secedit", "/export", "/cfg", str(tmp), "/quiet"])
+            if not result.success or not tmp.exists():
+                return None
+            text = tmp.read_text(encoding="utf-16-le", errors="ignore")
+            values = {}
+            for key, val in re.findall(r"(\w+)\s*=\s*(\d+)", text):
+                if key == "LockoutThreshold":
+                    values["threshold"] = int(val)
+                elif key == "LockoutDuration":
+                    values["duration"] = int(val) // 60
+                elif key == "ResetLockoutCount":
+                    values["window"] = int(val) // 60
+            return values
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    # =========================================================================
+    # Linux Scanner
+    # =========================================================================
+    def _scan_linux(self, policy: dict) -> List[SecurityCheck]:
         """Scan Linux PAM ``faillock`` configuration."""
         threshold = duration = window = 0
-        for cfg_path in [
+
+        pam_candidates = [
             Path("/etc/security/faillock.conf"),
             Path("/etc/pam.d/system-auth"),
             Path("/etc/pam.d/common-auth"),
-        ]:
+            Path("/etc/pam.d/password-auth"),
+        ]
+
+        for cfg_path in pam_candidates:
             if cfg_path.exists():
                 try:
-                    for line in cfg_path.read_text().split("\n"):
+                    text = cfg_path.read_text(encoding="utf-8", errors="ignore")
+                    for line in text.split("\n"):
                         line = line.strip()
                         if "deny" in line:
                             m = re.search(r"deny[=\s]+(\d+)", line)
@@ -121,43 +167,48 @@ class RPP2Scanner(BaseScanner):
                             m = re.search(r"fail_interval[=\s]+(\d+)", line)
                             if m:
                                 window = int(m.group(1)) // 60
-                except Exception:
+                except OSError:
                     pass
-        return self._build_checks(threshold, duration, window, True, False)
 
-    def _scan_web(self, target: str) -> List[SecurityCheck]:
-        """
-        Probe web application for lockout configuration evidence.
+        return self._build_checks(threshold, duration, window, True, False, policy)
 
-        Real probing pipeline:
-        1. Try /api/security/lockout-config
-        2. Try /api/auth/config
-        3. Brute-force probe: attempt multiple logins to observe lockout behavior
-        4. Check login page for lockout messages
-        5. Report honestly if no evidence found
-        """
+    # =========================================================================
+    # Web Scanner
+    # =========================================================================
+    def _scan_web(self, target: str, policy: dict) -> List[SecurityCheck]:
+        """Probe web application for lockout configuration evidence."""
         import httpx
         from urllib.parse import urljoin
 
-        evidence = None
-        source = "web_probe"
+        TIMEOUT = 5
+        HEADERS = {
+            "User-Agent": "Mozilla/5.0 (compatible; CyberSure-SecurityScanner/1.0)",
+            "Accept": "text/html,application/json",
+        }
+
+        evidence: Dict[str, Any] = {}
+        source = "none"
 
         # Step 1: Try structured API endpoints
         api_endpoints = [
             "/api/security/lockout-config",
             "/api/auth/config",
             "/api/security/config",
+            "/api/auth/lockout",
         ]
 
         for endpoint in api_endpoints:
             try:
                 url = urljoin(target.rstrip("/"), endpoint)
-                resp = httpx.get(url, timeout=8, follow_redirects=True, verify=False)
+                resp = httpx.get(url, timeout=TIMEOUT, follow_redirects=False,
+                                 verify=False, headers=HEADERS)
                 if resp.status_code == 200:
                     try:
                         data = resp.json()
-                        if isinstance(data, dict) and (
-                            "max_failed_attempts" in data or "lockout" in str(data).lower()
+                        if isinstance(data, dict) and any(
+                            k in data or k in str(data).lower()
+                            for k in ("max_failed_attempts", "lockout", "lockout_threshold",
+                                       "lockout_duration", "brute_force")
                         ):
                             evidence = data
                             source = f"API endpoint: {endpoint}"
@@ -167,77 +218,83 @@ class RPP2Scanner(BaseScanner):
             except Exception:
                 continue
 
-        # Step 2: Probe login page for lockout-related messages
+        # Step 2: Check response headers for rate-limiting indicators
         if not evidence:
-            login_paths = ["/login", "/signin", "/auth/login"]
+            try:
+                url = urljoin(target.rstrip("/"), "/")
+                resp = httpx.get(url, timeout=TIMEOUT, follow_redirects=True,
+                                 verify=False, headers=HEADERS)
+                resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+                rate_limit_headers = [
+                    "x-ratelimit-limit", "x-ratelimit-remaining",
+                    "x-ratelimit-reset", "retry-after",
+                    "x-rate-limit-limit", "x-account-lockout",
+                ]
+                found = [h for h in rate_limit_headers if h in resp_headers]
+                if found:
+                    evidence["rate_limiting_detected"] = True
+                    evidence["rate_limit_headers"] = found
+                    source = f"Response headers: {', '.join(found)}"
+            except Exception:
+                pass
+
+        # Step 3: Probe login page for lockout-related error patterns
+        if not evidence:
+            login_paths = ["/login", "/signin"]
             for path in login_paths:
                 try:
                     url = urljoin(target.rstrip("/"), path)
-                    resp = httpx.get(url, timeout=8, follow_redirects=True, verify=False)
+                    resp = httpx.get(url, timeout=TIMEOUT, follow_redirects=True,
+                                     verify=False, headers=HEADERS)
                     if resp.status_code == 200:
                         html = resp.text.lower()
-                        hints = {}
-                        if "locked" in html or "lockout" in html or "too many" in html:
-                            hints["lockout_detected"] = True
-                        if "attempts" in html and ("remaining" in html or "left" in html):
-                            hints["lockout_detected"] = True
-                        if hints:
-                            evidence = hints
-                            source = f"Login page lockout detection: {path}"
+                        lockout_patterns = [
+                            r"account.*locked", r"locked.*account",
+                            r"too many.*failed", r"too many.*attempts",
+                            r"temporarily.*locked", r"try again in \d+",
+                            r"wait \d+.*minutes?", r"maximum.*attempts.*reached",
+                            r"brute.?force.*detect", r"rate.*limit.*exceeded",
+                        ]
+                        matches = [p for p in lockout_patterns if re.search(p, html)]
+                        if matches:
+                            evidence["lockout_detected"] = True
+                            evidence["lockout_patterns_found"] = len(matches)
+                            source = f"Login page pattern match: {path}"
                             break
                 except Exception:
                     continue
 
         if not evidence:
-            return [
-                make_check(
-                    "web_probe_failed", "Web Lockout Policy Probe",
-                    False,
-                    "Accessible lockout configuration or observed lockout behavior",
-                    (f"Could not determine lockout policy from {target}. "
-                     "No lockout API endpoint found and no lockout behavior observed."),
-                    SeverityLevel.HIGH,
-                    ("Option 1: Expose a lockout config API at /api/security/lockout-config\n"
-                     "Option 2: Verify lockout manually by testing login attempts\n"
-                     "Option 3: Run this scanner in 'linux' or 'windows' mode on the actual server"),
-                ),
-            ]
+            return [make_check(
+                "web_probe_failed", "Web Lockout Policy Probe",
+                False,
+                "Accessible lockout configuration or observed lockout behavior",
+                (f"Could not determine lockout policy from {target}. "
+                 "No lockout API endpoint found and no lockout behavior observed."),
+                SeverityLevel.HIGH,
+                ("Option 1: Expose a lockout config API at /api/security/lockout-config\n"
+                 "Option 2: Verify lockout manually by testing login attempts\n"
+                 "Option 3: Run this scanner in 'linux' or 'windows' mode on the actual server"),
+            )]
 
-        # Build checks from actual evidence
-        threshold = evidence.get("max_failed_attempts", 0)
-        duration = evidence.get("lockout_duration_minutes", 0)
+        # Build checks from evidence
+        threshold = evidence.get("max_failed_attempts") or evidence.get("lockout_threshold", 0)
+        duration = evidence.get("lockout_duration_minutes") or evidence.get("lockout_duration", 0)
         window = evidence.get("reset_window_minutes", 0)
         admin_unlock = evidence.get("admin_unlock_enabled", True)
         audit = evidence.get("audit_logging", False)
-        lockout_detected = evidence.get("lockout_detected", False)
 
-        if lockout_detected and not threshold:
-            # We observed lockout behavior but don't have exact numbers
-            threshold = 5  # Conservative estimate
+        if evidence.get("lockout_detected") and not threshold:
+            threshold = 5
+        if evidence.get("rate_limiting_detected") and not threshold:
+            threshold = 3
 
-        return self._build_checks(threshold, duration, window, admin_unlock, audit)
+        return self._build_checks(threshold, duration, window, admin_unlock, audit, policy)
 
-    def _build_checks(self, threshold, duration, window, admin_unlock, audit) -> List[SecurityCheck]:
-        """Build lockout-policy checks from raw numeric / boolean values."""
-        return [
-            make_check("lockout_threshold", "Failed Attempt Threshold", 3 <= threshold <= 5,
-                       "3–5 attempts", f"{threshold} attempts", SeverityLevel.CRITICAL,
-                       "Windows: Account lockout threshold = 5\nLinux: pam_faillock deny=5"),
-            make_check("lockout_duration", "Lockout Duration", duration >= 15,
-                       ">=15 minutes", f"{duration} minutes", SeverityLevel.HIGH,
-                       f"Windows: Account lockout duration = 15\nLinux: pam_faillock unlock_time=900"),
-            make_check("reset_window", "Reset Window", window <= 15,
-                       "<=15 minutes", f"{window} minutes", SeverityLevel.MEDIUM,
-                       f"Windows: Reset lockout counter after = 15"),
-            make_check("admin_unlock", "Admin Unlock Capability", admin_unlock,
-                       "Enabled (secure, audited)", "Enabled" if admin_unlock else "Disabled",
-                       SeverityLevel.HIGH, "Enable admin unlock with audit logging"),
-            make_check("audit_logging", "Lockout Event Logging", audit,
-                       "All lockout events logged", "Enabled" if audit else "Disabled",
-                       SeverityLevel.MEDIUM, "Enable logging: failed attempts, lockouts, admin unlocks"),
-        ]
-
-    def _scan_config(self, cfg: dict) -> List[SecurityCheck]:
+    # =========================================================================
+    # Config (Manual Input) Scanner
+    # =========================================================================
+    def _scan_config(self, cfg: dict, policy: dict) -> List[SecurityCheck]:
         """Build checks from manually-supplied lockout configuration."""
         return self._build_checks(
             cfg.get("max_failed_attempts", 5),
@@ -245,17 +302,111 @@ class RPP2Scanner(BaseScanner):
             cfg.get("reset_window_minutes", 15),
             cfg.get("admin_unlock_enabled", True),
             cfg.get("audit_logging", True),
+            policy,
         )
 
-    def _fail(self, err: str) -> List[SecurityCheck]:
-        """Return a clear scan-failure indication — never fake default values."""
-        return [
-            make_check(
-                "scan_error", "RPP.2 Scan Error",
+    # =========================================================================
+    # Check Builder — unified evaluation
+    # =========================================================================
+    def _build_checks(
+        self, threshold: int, duration: int, window: int,
+        admin_unlock: bool, audit: bool, policy: dict,
+    ) -> List[SecurityCheck]:
+        """Build lockout-policy checks from raw values against policy thresholds."""
+        checks: List[SecurityCheck] = []
+
+        # Check 1: Lockout threshold
+        if threshold == 0:
+            checks.append(make_check(
+                "lockout_threshold", "Failed Attempt Threshold",
                 False,
-                "Successful scan execution",
-                f"Scan failed: {err}",
+                f"{policy['max_failed_attempts']} attempts",
+                "Lockout DISABLED (no threshold set)",
+                SeverityLevel.CRITICAL,
+                f"Set lockout threshold to {policy['max_failed_attempts']} attempts",
+            ))
+        else:
+            checks.append(make_check(
+                "lockout_threshold", "Failed Attempt Threshold",
+                3 <= threshold <= policy["max_failed_attempts"],
+                f"3–{policy['max_failed_attempts']} attempts",
+                f"{threshold} attempts",
+                SeverityLevel.CRITICAL,
+                f"Set lockout threshold to {policy['max_failed_attempts']} attempts",
+            ))
+
+        # Check 2: Lockout duration
+        if duration == 0:
+            checks.append(make_check(
+                "lockout_duration", "Lockout Duration",
+                False,
+                f">={policy['lockout_duration_minutes']} minutes",
+                "No lockout duration set",
                 SeverityLevel.HIGH,
-                f"Manual audit required. Error: {err}",
-            ),
-        ]
+                f"Set lockout duration to >= {policy['lockout_duration_minutes']} minutes",
+            ))
+        else:
+            checks.append(make_check(
+                "lockout_duration", "Lockout Duration",
+                duration >= policy["lockout_duration_minutes"],
+                f">={policy['lockout_duration_minutes']} minutes",
+                f"{duration} minutes",
+                SeverityLevel.HIGH,
+                f"Set lockout duration to >= {policy['lockout_duration_minutes']} minutes",
+            ))
+
+        # Check 3: Reset window
+        if window == 0:
+            checks.append(make_check(
+                "reset_window", "Reset Window",
+                False,
+                f"<={policy['reset_window_minutes']} minutes",
+                "No reset window configured",
+                SeverityLevel.MEDIUM,
+                f"Set reset window to <= {policy['reset_window_minutes']} minutes",
+            ))
+        else:
+            checks.append(make_check(
+                "reset_window", "Reset Window",
+                window <= policy["reset_window_minutes"],
+                f"<={policy['reset_window_minutes']} minutes",
+                f"{window} minutes",
+                SeverityLevel.MEDIUM,
+                f"Set reset window to <= {policy['reset_window_minutes']} minutes",
+            ))
+
+        # Check 4: Admin unlock
+        checks.append(make_check(
+            "admin_unlock", "Admin Unlock Capability",
+            admin_unlock,
+            "Enabled (secure, audited)",
+            "Enabled" if admin_unlock else "Disabled",
+            SeverityLevel.HIGH,
+            "Enable admin unlock with audit logging",
+        ))
+
+        # Check 5: Audit logging
+        checks.append(make_check(
+            "audit_logging", "Lockout Event Logging",
+            audit,
+            "All lockout events logged",
+            "Enabled" if audit else "Disabled",
+            SeverityLevel.MEDIUM,
+            "Enable logging: failed attempts, lockouts, admin unlocks",
+        ))
+
+        return checks
+
+    # =========================================================================
+    # Helpers
+    # =========================================================================
+    def _scan_error(self, message: str) -> SecurityCheck:
+        """Return a scan-error check — never fake pass/fail."""
+        return make_check(
+            "scan_error", "RPP.2 Scan Error",
+            False,
+            "Successful scan execution",
+            f"Scan failed: {message}",
+            SeverityLevel.HIGH,
+            f"Manual audit required. Error: {message}",
+        )

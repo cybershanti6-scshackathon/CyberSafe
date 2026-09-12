@@ -1,0 +1,252 @@
+# ============================================================
+# FortiOS (FortiGate) Sample Configuration
+# Features: hostname, SSH, VLANs, interfaces, ACL, NAT,
+#           OSPF, static routing, logging, NTP, QoS
+# ============================================================
+
+config system global
+    set hostname "CORP-RTR-01"
+    set domain "corp.example.com"
+    set timezone "UTC"
+    set admin-scp enable
+    set ssh-server-keygen enable
+    set ssh-enc-algo aes256-gcm@openssh.com aes128-gcm@openssh.com
+    set ssh-mac-hmac-sha2-256 ssh-mac-hmac-sha2-512
+    set sshd-curve25519-sha256 enable
+    set ssh-cbc-cipher disable
+end
+
+config system ssh
+    set status enable
+    set port 22
+    set password-min-len 12
+    set untrusted-hosts-auth-timeout 60
+    set max-retry 3
+end
+
+config system ntp
+    set type custom
+    config ntpserver
+        edit 1
+            set server "10.0.10.10"
+            set authentication-key ""
+        next
+        edit 2
+            set server "10.0.10.11"
+            set authentication-key ""
+        next
+    end
+    set ntpsync enable
+    set interval 60
+end
+
+config system syslog
+    config setting
+        set status enable
+    end
+    config remote
+        edit 1
+            set name "SYSLOG-SERVER"
+            set server "10.0.10.100"
+            set port 514
+            set mode udp
+            set severity information
+        next
+    end
+end
+
+config system interface
+    edit "port1"
+        set alias "UPLINK_TO_ISP"
+        set mode static
+        set ip 203.0.113.1/255.255.255.0
+        set allowaccess ping https ssh
+        set role wan
+        set device-identification enable
+    next
+    edit "port2"
+        set alias "LAN_VLAN10_MANAGEMENT"
+        set mode static
+        set ip 10.0.10.1/255.255.255.0
+        set allowaccess ping https ssh
+        set role lan
+        set device-identification enable
+    next
+    edit "port3"
+        set alias "LAN_VLAN20_SERVERS"
+        set mode static
+        set ip 10.0.20.1/255.255.255.0
+        set allowaccess ping https ssh
+        set role lan
+        set device-identification enable
+    next
+    edit "port4"
+        set alias "TRUNK_TO_SWITCH"
+        set mode static
+        set ip 10.0.99.1/255.255.255.0
+        set allowaccess ping https ssh
+        set role lan
+        set vlanid 99
+    next
+end
+
+config system vlan
+    edit "VLAN10"
+        set vlanid 10
+        set interface "port2"
+        set ip 10.0.10.1/255.255.255.0
+    next
+    edit "VLAN20"
+        set vlanid 20
+        set interface "port3"
+        set ip 10.0.20.1/255.255.255.0
+    next
+    edit "VLAN30"
+        set vlanid 30
+        set interface "port4"
+        set ip 10.0.30.1/255.255.255.0
+    next
+end
+
+config router static
+    edit 1
+        set dst 0.0.0.0/0
+        set gateway 203.0.113.254
+    next
+    edit 2
+        set dst 10.0.100.0/24
+        set gateway 10.0.10.254
+    next
+end
+
+config router ospf
+    config area
+        edit 0.0.0.0
+        next
+    end
+    config network
+        edit 1
+            set area 0.0.0.0
+            set prefix 10.0.10.0/255.255.255.0
+        next
+        edit 2
+            set area 0.0.0.0
+            set prefix 10.0.20.0/255.255.255.0
+        next
+        edit 3
+            set area 0.0.0.0
+            set prefix 10.0.30.0/255.255.255.0
+        next
+        edit 4
+            set area 0.0.0.0
+            set prefix 203.0.113.0/255.255.255.0
+        next
+    end
+    set router-id 1.1.1.1
+end
+
+# ACL - Address Objects (Tier 2)
+config firewall address
+    edit "MGMT_NET"
+        set subnet 10.0.10.0/255.255.255.0
+    next
+    edit "SERVERS_NET"
+        set subnet 10.0.20.0/255.255.255.0
+    next
+    edit "USERS_NET"
+        set subnet 10.0.30.0/255.255.255.0
+    next
+end
+
+# Firewall Policy (Tier 2)
+config firewall policy
+    edit 1
+        set name "PERMIT_MANAGEMENT"
+        set srcintf "port2"
+        set dstintf "port1"
+        set srcaddr "MGMT_NET"
+        set service "ALL"
+        set logtraffic all
+        set action accept
+    next
+    edit 2
+        set name "RESTRICT_SERVERS"
+        set srcintf "port4"
+        set dstintf "port3"
+        set srcaddr "USERS_NET"
+        set dstaddr "SERVERS_NET"
+        set service "HTTPS"
+        set logtraffic all
+        set action accept
+    next
+end
+
+# NAT - Virtual IPs (Tier 2)
+config firewall vip
+    edit "WEB_SERVER_VIP"
+        set extip 203.0.113.10
+        set mappedip 10.0.20.10
+        set extport 80
+        set mappedport 80
+        set protocol tcp
+    next
+    edit "WEB_SERVERS_VIP"
+        set extip 203.0.113.11
+        set mappedip 10.0.20.11
+        set extport 443
+        set mappedport 443
+        set protocol tcp
+    next
+end
+
+config firewall policy
+    edit 3
+        set name "NAT_WEB_TRAFFIC"
+        set srcintf "port1"
+        set dstintf "port3"
+        set dstaddr "WEB_SERVER_VIP"
+        set service "HTTP"
+        set logtraffic all
+        set action accept
+        set ippool enable
+        set poolname "DYNAMIC_NAT"
+    next
+end
+
+config firewall ippool
+    edit "DYNAMIC_NAT"
+        set startip 203.0.113.10
+        set endip 203.0.113.20
+    next
+end
+
+# QoS - Traffic Shaping (Tier 3 - Not Supported)
+config firewall shaper traffic-shaper
+    edit "VOICE_SHAPER"
+        set max-bandwidth 30
+        set per-policy enable
+    next
+    edit "CRITICAL_SHAPER"
+        set max-bandwidth 40
+        set per-policy enable
+    next
+end
+
+config firewall shaper traffic-shaper-policy
+    edit "WAN_POLICY"
+        set service "ALL"
+        set dscp 46
+        set traffic-shaper "VOICE_SHAPER"
+    next
+end
+
+config system accprofile
+    edit "custom_admin"
+        set secfabgrp read
+        set ftgd-wf read
+        set loggrp read
+        set fwgrp read
+        set vpngrp read
+        set utmgrp read
+    next
+end

@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Device and Vendors — CyberSure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..700,0..1,0..200" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+.conv-wrap { max-width: 1100px; margin: 0 auto; }
+
+/* Header */
+.conv-header { text-align: center; margin-bottom: 28px; }
+.conv-header h1 { font-size: 26px; font-weight: 800; margin: 0 0 6px; }
+.conv-header p { color: var(--muted); margin: 0; font-size: 14px; }
+
+/* Vendor row */
+.vendor-row {
+  display: flex; align-items: center; justify-content: center;
+  gap: 16px; margin-bottom: 20px; flex-wrap: wrap;
+}
+.vendor-select {
+  padding: 10px 18px; border: 2px solid var(--border); border-radius: 12px;
+  background: var(--surface); font-size: 14px; font-weight: 700; min-width: 160px;
+  text-align: center; cursor: pointer; transition: .2s;
+}
+.vendor-select:focus { border-color: var(--primary); outline: none; }
+.vendor-arrow { font-size: 24px; color: var(--primary); }
+
+/* Two textareas */
+.editor-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.editor-col { display: flex; flex-direction: column; }
+.editor-label {
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--muted); margin-bottom: 8px;
+}
+.editor-textarea {
+  flex: 1; width: 100%; min-height: 360px; padding: 16px;
+  border: 1px solid var(--border); border-radius: 14px;
+  background: var(--surface); color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; line-height: 1.6; resize: vertical;
+  white-space: pre; overflow: auto;
+}
+.editor-textarea::placeholder { color: var(--muted); }
+.editor-textarea[readonly] { cursor: default; background: var(--surface-2); }
+
+/* Button row */
+.btn-row { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+.convert-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 14px 36px; background: var(--primary); color: #fff;
+  border: none; border-radius: 14px; font-size: 16px; font-weight: 800;
+  cursor: pointer; transition: .2s;
+}
+.convert-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(14,165,198,.3); }
+.convert-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+.small-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 10px 16px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: .2s;
+}
+.small-btn:hover { border-color: var(--primary); color: var(--primary); }
+.small-btn .material-symbols-outlined { font-size: 16px; }
+.file-name { font-size: 12px; color: var(--muted); line-height: 38px; }
+.file-name.ok { color: var(--success); }
+
+/* Stats row */
+.stats-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 20px; }
+.stat-pill {
+  display: flex; align-items: center; gap: 6px; padding: 8px 14px;
+  border-radius: 999px; font-size: 13px; font-weight: 600;
+  background: var(--surface-2);
+}
+.stat-pill.green { background: #dcfce7; color: #166534; }
+.stat-pill.amber { background: #fef3c7; color: #a16207; }
+.stat-pill .material-symbols-outlined { font-size: 16px; }
+
+/* Note */
+.note-banner {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px;
+  padding: 12px 16px; font-size: 12px; color: #92400e; margin-top: 8px;
+}
+.note-banner .material-symbols-outlined { color: #d97706; flex-shrink: 0; margin-top: 1px; font-size: 18px; }
+
+/* Info cards */
+.info-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.info-card {
+  padding: 18px 20px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.info-card.source-card { border-left: 4px solid #0ea5c6; }
+.info-card.target-card { border-left: 4px solid #16a34a; }
+.info-card h3 {
+  font-size: 14px; font-weight: 700; margin: 0 0 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.info-card.source-card h3 { color: #0ea5c6; }
+.info-card.target-card h3 { color: #16a34a; }
+.info-card p { font-size: 13px; color: var(--muted); margin: 0; line-height: 1.5; }
+.info-card .tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  margin-right: 4px;
+}
+.info-card.source-card .tag { background: #dff7fc; color: #0ea5c6; }
+.info-card.target-card .tag { background: #dcfce7; color: #16a34a; }
+@media(max-width: 800px) {
+  .info-cards { grid-template-columns: 1fr; }
+}
+
+/* Review items */
+.review-section { margin-top: 16px; }
+.review-section h3 { font-size: 14px; font-weight: 700; margin: 0 0 10px; }
+.review-item {
+  padding: 8px 12px; margin: 4px 0; border-radius: 8px;
+  font-size: 12px; font-family: ui-monospace, monospace;
+}
+.review-item.tier2 { background: #fef3c7; border-left: 3px solid #d97706; }
+.review-item.tier3 { background: #fee2e2; border-left: 3px solid #dc2626; }
+.review-reason { font-size: 11px; color: var(--muted); margin-top: 3px; font-family: Inter, sans-serif; }
+
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@media(max-width: 800px) {
+  .editor-pair { grid-template-columns: 1fr; }
+
+}
+</style>
+</head>
+<body>
+<div data-app>
+
+<div class="page">
+  <div class="conv-wrap">
+    <!-- Header -->
+    <div class="conv-header">
+      <h1>Device and Vendors</h1>
+      <p>Paste your config text, pick source and target devices, convert.</p>
+    </div>
+
+    <!-- Vendor selectors -->
+    <div class="vendor-row">
+      <select class="vendor-select" id="sourceVendor">
+        <option value="cisco">Cisco IOS XE</option>
+        <option value="juniper">Juniper Junos</option>
+        <option value="fortinet">FortiOS</option>
+      </select>
+      <span class="material-symbols-outlined vendor-arrow">arrow_forward</span>
+      <select class="vendor-select" id="targetVendor">
+        <option value="juniper">Juniper Junos</option>
+        <option value="cisco">Cisco IOS XE</option>
+        <option value="fortinet">FortiOS</option>
+      </select>
+    </div>
+
+    <!-- Two textareas -->
+    <div class="editor-pair">
+      <div class="editor-col">
+        <div class="editor-label">SOURCE CONFIG</div>
+        <textarea class="editor-textarea" id="sourceConfig" placeholder="Paste your device configuration here...&#10;&#10;hostname CORP-RTR-01&#10;!&#10;interface GigabitEthernet0/0&#10; ip address 203.0.113.1 255.255.255.0&#10; no shutdown" spellcheck="false"></textarea>
+      </div>
+      <div class="editor-col">
+        <div class="editor-label">CONVERTED CONFIG</div>
+        <textarea class="editor-textarea" id="targetConfig" readonly placeholder="Converted configuration will appear here..." spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <!-- Info cards describing what each side does -->
+    <div class="info-cards">
+      <div class="info-card source-card">
+        <h3><span class="material-symbols-outlined" style="font-size:20px">input</span> Input — Source Device</h3>
+        <p>Paste the raw configuration from your source network device. This can be a router, switch, firewall, or any other vendor appliance. The system will parse and convert commands from the source vendor syntax into the target vendor syntax automatically.</p>
+        <div style="margin-top:10px">
+          <span class="tag">Cisco IOS XE</span>
+          <span class="tag">Juniper Junos</span>
+          <span class="tag">FortiOS</span>
+        </div>
+      </div>
+      <div class="info-card target-card">
+        <h3><span class="material-symbols-outlined" style="font-size:20px">output</span> Output — Target Device</h3>
+        <p>The converted configuration appears here, translated into the target vendor's syntax. Review any flagged items before deploying — some complex commands like ACLs, NAT, and QoS may need manual adjustment.</p>
+        <div style="margin-top:10px">
+          <span class="tag">Auto-converted</span>
+          <span class="tag">Review flagged</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Source toolbar -->
+    <div class="btn-row" style="justify-content:flex-start;gap:8px;margin-bottom:12px">
+      <label class="small-btn" for="configFile" style="cursor:pointer">
+        <span class="material-symbols-outlined">upload_file</span> Upload File
+      </label>
+      <input type="file" id="configFile" accept=".txt,.cfg,.conf,.configng" style="display:none">
+      <span class="file-name" id="fileName"></span>
+    </div>
+
+    <!-- Convert + output buttons -->
+    <div class="btn-row">
+      <button class="convert-btn" id="convertBtn" type="button">
+        <span class="material-symbols-outlined">swap_horiz</span> Convert
+      </button>
+      <button class="small-btn" id="copyBtn" type="button" style="display:none">
+        <span class="material-symbols-outlined">content_copy</span> Copy
+      </button>
+      <button class="small-btn" id="saveBtn" type="button" style="display:none">
+        <span class="material-symbols-outlined">download</span> Save
+      </button>
+      <button class="small-btn" id="pdfBtn" type="button" style="display:none">
+        <span class="material-symbols-outlined">picture_as_pdf</span> Export PDF
+      </button>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-row" id="statsRow" style="display:none">
+      <div class="stat-pill green">
+        <span class="material-symbols-outlined">check_circle</span>
+        Converted: <strong id="statConverted">0</strong>
+      </div>
+      <div class="stat-pill amber">
+        <span class="material-symbols-outlined">warning</span>
+        Review: <strong id="statReview">0</strong>
+      </div>
+      <div class="stat-pill">
+        <span class="material-symbols-outlined">analytics</span>
+        Accuracy: <strong id="statAccuracy">0%</strong>
+      </div>
+      <div class="stat-pill">
+        <span class="material-symbols-outlined">timer</span>
+        Time: <strong id="statTime">0ms</strong>
+      </div>
+    </div>
+
+    <!-- Review items -->
+    <div class="review-section" id="reviewSection" style="display:none">
+      <h3>Items Needing Review</h3>
+      <div id="reviewList"></div>
+    </div>
+
+    <!-- Note -->
+    <div class="note-banner">
+      <span class="material-symbols-outlined">info</span>
+      <div><strong>Note:</strong> ACLs, NAT and QoS configs are flagged for manual review. Verify converted output before deploying.</div>
+    </div>
+
+
+  </div>
+</div>
+
+</div>
+<script src="/static/app.js"></script>
+<script src="/static/scanner.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+const sourceVendor = document.getElementById('sourceVendor');
+const targetVendor = document.getElementById('targetVendor');
+const sourceConfig = document.getElementById('sourceConfig');
+const targetConfig = document.getElementById('targetConfig');
+const convertBtn = document.getElementById('convertBtn');
+const copyBtn = document.getElementById('copyBtn');
+const saveBtn = document.getElementById('saveBtn');
+const pdfBtn = document.getElementById('pdfBtn');
+const configFile = document.getElementById('configFile');
+const fileName = document.getElementById('fileName');
+const statsRow = document.getElementById('statsRow');
+const reviewSection = document.getElementById('reviewSection');
+const reviewList = document.getElementById('reviewList');
+
+const vendorLabels = { cisco: 'Cisco IOS XE', juniper: 'Juniper Junos', fortinet: 'FortiOS' };
+
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Convert
+convertBtn.addEventListener('click', async () => {
+  const config = sourceConfig.value.trim();
+  if (!config) { toast('Paste a configuration first.'); return; }
+  if (sourceVendor.value === targetVendor.value) { toast('Source and target must be different.'); return; }
+
+  convertBtn.disabled = true;
+  convertBtn.innerHTML = '<span class="material-symbols-outlined" style="animation:spin 1s linear infinite">sync</span> Converting...';
+
+  try {
+    const result = await ScannerAPI.post('/api/converter/convert', {
+      config_text: config,
+      source_vendor: sourceVendor.value,
+      target_vendor: targetVendor.value,
+    });
+
+    targetConfig.value = result.output_config;
+    copyBtn.style.display = '';
+    saveBtn.style.display = '';
+    pdfBtn.style.display = '';
+
+    document.getElementById('statConverted').textContent = result.commands_converted;
+    document.getElementById('statReview').textContent = result.commands_need_review;
+    document.getElementById('statAccuracy').textContent = result.conversion_accuracy + '%';
+    const t = result.conversion_time_ms;
+    document.getElementById('statTime').textContent = t >= 1000 ? (t/1000).toFixed(1)+'s' : Math.round(t)+'ms';
+    statsRow.style.display = 'flex';
+
+    const flagged = result.lines.filter(l => l.status === 'needs_review' || l.status === 'not_supported');
+    if (flagged.length) {
+      reviewList.innerHTML = flagged.map(i =>
+        `<div class="review-item ${i.tier}"><code>${esc(i.converted)}</code>${i.reason ? `<div class="review-reason">${esc(i.reason)}</div>` : ''}</div>`
+      ).join('');
+      reviewSection.style.display = '';
+    } else {
+      reviewSection.style.display = 'none';
+    }
+
+    toast('Conversion completed!');
+  } catch (e) {
+    toast('Conversion failed: ' + e.message);
+  } finally {
+    convertBtn.disabled = false;
+    convertBtn.innerHTML = '<span class="material-symbols-outlined">swap_horiz</span> Convert';
+  }
+});
+
+// Copy
+copyBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(targetConfig.value);
+  toast('Copied to clipboard!');
+});
+
+// Save
+saveBtn.addEventListener('click', () => {
+  const ext = { cisco: 'cfg', juniper: 'conf', fortinet: 'conf' }[targetVendor.value] || 'txt';
+  const blob = new Blob([targetConfig.value], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'converted_' + vendorLabels[targetVendor.value].replace(/\s+/g,'_').toLowerCase() + '.' + ext;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('File saved!');
+});
+
+// File upload
+configFile.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    fileName.textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = (ev) => { sourceConfig.value = ev.target.result; };
+    reader.readAsText(file);
+  }
+});
+
+// PDF Export
+pdfBtn.addEventListener('click', () => {
+  const src = vendorLabels[sourceVendor.value];
+  const tgt = vendorLabels[targetVendor.value];
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+  const timeStr = now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', hour12:true });
+
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    toast('PDF library not loaded. Saving as text file.');
+    const content = [
+      'CyberSure Device and Vendors',
+      'Source: ' + src + '  |  Target: ' + tgt + '  |  Date: ' + dateStr + ' ' + timeStr,
+      '',
+      '=== SOURCE ===',
+      sourceConfig.value,
+      '',
+      '=== CONVERTED ===',
+      targetConfig.value,
+      '',
+      'Converted: ' + document.getElementById('statConverted').textContent + ' commands',
+      'Review: ' + document.getElementById('statReview').textContent + ' commands',
+      'Accuracy: ' + document.getElementById('statAccuracy').textContent,
+    ].join('\n');
+    const blob = new Blob([content], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'conversion_' + src.replace(/\s+/g,'_') + '_to_' + tgt.replace(/\s+/g,'_') + '.txt';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const margin = 18;
+  let y = margin;
+
+  // Title
+  doc.setFontSize(20);
+  doc.setFont('helvetica', 'bold');
+  doc.text('CyberSure', margin, y); y += 10;
+  doc.setFontSize(14);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Configuration Conversion Report', margin, y); y += 8;
+
+  // Meta info
+  doc.setFontSize(9);
+  doc.setTextColor(100);
+  doc.text('Source: ' + src + '   |   Target: ' + tgt + '   |   ' + dateStr + ' ' + timeStr, margin, y); y += 4;
+  doc.text('Accuracy: ' + document.getElementById('statAccuracy').textContent + '   |   Converted: ' + document.getElementById('statConverted').textContent + '   |   Review: ' + document.getElementById('statReview').textContent, margin, y); y += 10;
+  doc.setTextColor(0);
+
+  // Divider
+  doc.setDrawColor(200); doc.line(margin, y, 192, y); y += 8;
+
+  // Source config
+  doc.setFontSize(11); doc.setFont('helvetica', 'bold');
+  doc.text('SOURCE CONFIGURATION (' + src + ')', margin, y); y += 7;
+  doc.setFont('courier'); doc.setFontSize(8);
+  const srcLines = doc.splitTextToSize(sourceConfig.value || '(empty)', 170);
+  srcLines.forEach(l => { if (y > 270) { doc.addPage(); y = margin; } doc.text(l, margin, y); y += 4; });
+  y += 6;
+
+  // Divider
+  doc.setDrawColor(200); doc.line(margin, y, 192, y); y += 8;
+
+  // Converted config
+  doc.setFontSize(11); doc.setFont('helvetica', 'bold');
+  doc.text('CONVERTED CONFIGURATION (' + tgt + ')', margin, y); y += 7;
+  doc.setFont('courier'); doc.setFontSize(8);
+  const tgtLines = doc.splitTextToSize(targetConfig.value || '(empty)', 170);
+  tgtLines.forEach(l => { if (y > 270) { doc.addPage(); y = margin; } doc.text(l, margin, y); y += 4; });
+  y += 6;
+
+  // Footer note
+  doc.setDrawColor(200); doc.line(margin, y, 192, y); y += 8;
+  doc.setFont('helvetica'); doc.setFontSize(8); doc.setTextColor(120);
+  doc.text('Note: ACLs, NAT and QoS configs may require manual review. Verify before deploying.', margin, y); y += 4;
+  doc.text('Generated by CyberSure Configuration Converter', margin, y);
+
+  const fname = 'conversion_' + src.replace(/\s+/g,'_') + '_to_' + tgt.replace(/\s+/g,'_') + '.pdf';
+  doc.save(fname);
+  toast('PDF exported!');
+});
+
+}); // end DOMContentLoaded
+</script>
+</body>
+</html>

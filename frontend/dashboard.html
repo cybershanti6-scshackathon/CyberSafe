@@ -14,7 +14,7 @@
 <div data-app>
 
 <div class="page">
-  <div class="page-head"><div><h1>CyberSure Dashboard</h1><p>Your cybersecurity overview.</p></div><div class="toolbar" style="display:flex;align-items:center;gap:16px"><div class="shield-scene shield-sm"><div class="shield"><div class="shield-body"></div><div class="shield-lock"><div class="shield-lock-shackle"></div><div class="shield-lock-body"><div class="shield-lock-hole"></div></div></div></div></div><a class="btn btn-primary" href="rpp.html"><span class="material-symbols-outlined">play_arrow</span>Start Assessment</a></div></div>
+  <div class="page-head"><div><h1>CyberSure Dashboard</h1><p>Your cybersecurity overview.</p></div><div class="toolbar" style="display:flex;align-items:center;gap:16px"><img src="/static/logo.svg" alt="CyberSure Logo" class="logo-float" style="width:56px;height:56px;filter:drop-shadow(0 4px 12px rgba(14,165,198,.3))"><a class="btn btn-primary" href="rpp.html"><span class="material-symbols-outlined">play_arrow</span>Start Assessment</a></div></div>
   <section class="grid-4">
     <div class="card score-card"><span class="muted">Total Scanners</span><div class="score" id="totalScanners">—</div><p class="muted" id="scannerCategories">Loading...</p></div>
     <div class="card score-card"><span class="muted">System</span><div class="score" id="systemOS" style="font-size:22px">—</div><p class="muted" id="systemHostname">Detecting...</p></div>
@@ -33,12 +33,12 @@
       </div>
     </div>
   </section>
+
   <section class="card" style="margin-top:16px">
     <h2 class="section-title" style="font-size:22px">Assessment Modules</h2>
     <div class="grid-3">
       <a class="card" href="rpp.html"><strong>RPP</strong><p class="muted" id="rppCount">Loading...</p></a>
       <a class="card" href="nes.html"><strong>NES</strong><p class="muted" id="nesCount">Loading...</p></a>
-      <a class="card" href="devices-vendors.html"><strong>Devices & Vendors</strong><p class="muted" id="deviceCount">Loading...</p></a>
       <a class="card" href="web-security.html"><strong>Web Security</strong><p class="muted" id="webCount">Loading...</p></a>
     </div>
   </section>
@@ -84,12 +84,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Update module counts
     const rpp = cats['RPP'] || [];
     const nes = cats['NES'] || [];
-    const device = cats['DEVICE'] || cats['CISCO'] || cats['FORTINET'] || cats['JUNIPER'] || [];
     const web = cats['WEB'] || [];
     document.getElementById('rppCount').textContent = rpp.length + ' scanner' + (rpp.length !== 1 ? 's' : '') + ' — RPP.1 to RPP.4';
     document.getElementById('nesCount').textContent = nes.length + ' scanner' + (nes.length !== 1 ? 's' : '') + ' — Network & email security';
-    document.getElementById('deviceCount').textContent = device.length + ' scanner' + (device.length !== 1 ? 's' : '') + ' — Multi-vendor compliance';
     document.getElementById('webCount').textContent = web.length + ' scanner' + (web.length !== 1 ? 's' : '') + ' — Website security checks';
+
+
 
   } catch (e) {
     document.getElementById('serverStatus').textContent = 'Offline';

@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CyberShield Animation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 50%, #0d1025 100%);
+            overflow: hidden;
+        }
+
+        /* Container for the shield and effects */
+        .shield-container {
+            position: relative;
+            width: 200px;
+            height: 240px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Keyframe Animations */
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(0px);
+            }
+            50% {
+                transform: translateY(-15px);
+            }
+        }
+
+        @keyframes pulse-ring {
+            0% {
+                transform: scale(0.9);
+                opacity: 0.8;
+            }
+            50% {
+                transform: scale(1.1);
+                opacity: 0.4;
+            }
+            100% {
+                transform: scale(0.9);
+                opacity: 0.8;
+            }
+        }
+
+        @keyframes scan {
+            0% {
+                top: 0%;
+                opacity: 0;
+            }
+            10% {
+                opacity: 1;
+            }
+            90% {
+                opacity: 1;
+            }
+            100% {
+                top: 100%;
+                opacity: 0;
+            }
+        }
+
+        @keyframes sparkle {
+            0%, 100% {
+                opacity: 0;
+                transform: scale(0) translateY(0);
+            }
+            50% {
+                opacity: 1;
+                transform: scale(1) translateY(-20px);
+            }
+        }
+
+        @keyframes glow {
+            0%, 100% {
+                box-shadow:
+                    0 0 20px rgba(59, 130, 246, 0.5),
+                    0 0 40px rgba(139, 92, 246, 0.3),
+                    0 0 60px rgba(59, 130, 246, 0.2);
+            }
+            50% {
+                box-shadow:
+                    0 0 30px rgba(59, 130, 246, 0.7),
+                    0 0 60px rgba(139, 92, 246, 0.5),
+                    0 0 90px rgba(59, 130, 246, 0.3);
+            }
+        }
+
+        /* The Shield */
+        .shield {
+            position: relative;
+            width: 140px;
+            height: 160px;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 50%, #6366f1 100%);
+            border-radius: 10px 10px 70px 70px;
+            animation: float 3s ease-in-out infinite, glow 3s ease-in-out infinite;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+
+        .shield:hover {
+            transform: scale(1.05);
+        }
+
+        /* Shield inner design - checkmark */
+        .shield::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 60px;
+            height: 60px;
+            border-left: 6px solid rgba(255, 255, 255, 0.9);
+            border-bottom: 6px solid rgba(255, 255, 255, 0.9);
+            transform: translate(-50%, -60%) rotate(-45deg);
+            border-radius: 2px;
+        }
+
+        /* Shield highlight */
+        .shield::after {
+            content: '';
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 40px;
+            height: 60px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.3) 0%, transparent 60%);
+            border-radius: 8px 8px 0 0;
+        }
+
+        /* Pulse Ring Effect */
+        .pulse-ring {
+            position: absolute;
+            width: 160px;
+            height: 180px;
+            border: 3px solid rgba(59, 130, 246, 0.4);
+            border-radius: 12px 12px 75px 75px;
+            animation: pulse-ring 2s ease-in-out infinite;
+        }
+
+        .pulse-ring:nth-child(2) {
+            animation-delay: 0.5s;
+            border-color: rgba(139, 92, 246, 0.3);
+        }
+
+        /* Scan Line Effect */
+        .scan-line {
+            position: absolute;
+            width: 120px;
+            height: 4px;
+            background: linear-gradient(90deg,
+                transparent 0%,
+                rgba(255, 255, 255, 0.8) 50%,
+                transparent 100%);
+            animation: scan 3s linear infinite;
+            border-radius: 2px;
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+
+        /* Sparkle Particles */
+        .sparkles {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .sparkle {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            background: white;
+            border-radius: 50%;
+            animation: sparkle 2s ease-in-out infinite;
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+        }
+
+        .sparkle:nth-child(1) {
+            top: 10%;
+            left: 20%;
+            animation-delay: 0s;
+        }
+
+        .sparkle:nth-child(2) {
+            top: 20%;
+            right: 15%;
+            animation-delay: 0.3s;
+        }
+
+        .sparkle:nth-child(3) {
+            top: 40%;
+            left: 10%;
+            animation-delay: 0.6s;
+        }
+
+        .sparkle:nth-child(4) {
+            top: 50%;
+            right: 5%;
+            animation-delay: 0.9s;
+        }
+
+        .sparkle:nth-child(5) {
+            bottom: 30%;
+            left: 15%;
+            animation-delay: 1.2s;
+        }
+
+        .sparkle:nth-child(6) {
+            bottom: 20%;
+            right: 20%;
+            animation-delay: 1.5s;
+        }
+
+        .sparkle:nth-child(7) {
+            top: 30%;
+            left: 50%;
+            animation-delay: 0.4s;
+        }
+
+        .sparkle:nth-child(8) {
+            bottom: 40%;
+            left: 40%;
+            animation-delay: 1.8s;
+        }
+
+        /* Title text */
+        .title {
+            position: absolute;
+            bottom: -60px;
+            text-align: center;
+            width: 100%;
+        }
+
+        .title h2 {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 1.5rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: 2px;
+        }
+
+        .title p {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.5);
+            margin-top: 5px;
+        }
+
+        /* Accessibility: Reduced Motion */
+        @media (prefers-reduced-motion: reduce) {
+            .shield,
+            .pulse-ring,
+            .scan-line,
+            .sparkle {
+                animation: none;
+            }
+
+            .shield {
+                box-shadow:
+                    0 0 20px rgba(59, 130, 246, 0.5),
+                    0 0 40px rgba(139, 92, 246, 0.3);
+            }
+
+            .sparkle {
+                opacity: 0.5;
+            }
+        }
+
+        /* Floating particles in background */
+        .bg-particles {
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .bg-particle {
+            position: absolute;
+            width: 2px;
+            height: 2px;
+            background: rgba(59, 130, 246, 0.3);
+            border-radius: 50%;
+            animation: float 8s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+    <!-- Background Particles -->
+    <div class="bg-particles" id="bgParticles"></div>
+
+    <!-- Shield Container -->
+    <div class="shield-container">
+        <!-- Pulse Rings -->
+        <div class="pulse-ring"></div>
+        <div class="pulse-ring"></div>
+
+        <!-- Sparkles -->
+        <div class="sparkles">
+            <div class="sparkle"></div>
+            <div class="sparkle"></div>
+            <div class="sparkle"></div>
+            <div class="sparkle"></div>
+            <div class="sparkle"></div>
+            <div class="sparkle"></div>
+            <div class="sparkle"></div>
+            <div class="sparkle"></div>
+        </div>
+
+        <!-- The Shield -->
+        <div class="shield">
+            <!-- Scan Line -->
+            <div class="scan-line"></div>
+        </div>
+
+        <!-- Title -->
+        <div class="title">
+            <h2>CYBERSURE</h2>
+            <p>Security Assessment Platform</p>
+        </div>
+    </div>
+
+    <script>
+        // Generate background particles
+        const bgParticles = document.getElementById('bgParticles');
+        for (let i = 0; i < 50; i++) {
+            const particle = document.createElement('div');
+            particle.className = 'bg-particle';
+            particle.style.left = Math.random() * 100 + '%';
+            particle.style.top = Math.random() * 100 + '%';
+            particle.style.animationDelay = Math.random() * 8 + 's';
+            particle.style.animationDuration = (5 + Math.random() * 5) + 's';
+            bgParticles.appendChild(particle);
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+# RPP.2 — Account Lockout Policy
+# ================================
+# CERT-In: Temporarily lock accounts after 3–5 failed login attempts.
+
+rpp2:
+  # Failed attempts before lockout (CERT-In: 3–5)
+  max_failed_attempts: 5
+
+  # How long the account stays locked (minutes, CERT-In: >=15)
+  lockout_duration_minutes: 15
+
+  # Reset failed attempt counter after N minutes (CERT-In: <=15)
+  reset_window_minutes: 15
+
+  # Allow admin manual unlock
+  admin_unlock_enabled: true
+
+  # Log lockout events for audit trail
+  audit_logging: true

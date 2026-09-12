@@ -1,0 +1,51 @@
+# NES.2 — Wi-Fi Security
+# =======================
+# Auto-detect Wi-Fi settings and flag security issues.
+
+nes2:
+  # Minimum password length for Wi-Fi
+  min_password_length: 16
+
+  # Minimum entropy bits for password strength
+  min_entropy_bits: 50
+
+  # Approved encryption types (in order of preference)
+  approved_encryption:
+    - "WPA3-Personal"
+    - "WPA3"
+    - "SAE"
+    - "WPA2-Personal"
+    - "WPA2"
+    - "AES"
+
+  # Rejected encryption types
+  rejected_encryption:
+    - "WEP"
+    - "Open"
+    - "None"
+    - "TKIP"
+
+  # Minimum signal strength percentage (too weak = coverage extends outside premises)
+  min_signal_strength: 40
+
+  # Maximum signal strength percentage (too strong = may extend beyond premises)
+  max_signal_strength: 80
+
+  # Modern Wi-Fi standards (pass check if detected)
+  modern_standards:
+    - "802.11ax"  # Wi-Fi 6/6E/7
+    - "802.11ac"  # Wi-Fi 5
+    - "AX"
+    - "AC"
+
+  # Non-overlapping 2.4 GHz channels
+  safe_channels_2ghz:
+    - 1
+    - 6
+    - 11
+
+  # Require PMF (Protected Management Frames) to prevent deauth attacks
+  require_pmf: true
+
+  # Require enterprise Wi-Fi (802.1X) for business environments
+  require_enterprise_wifi: false

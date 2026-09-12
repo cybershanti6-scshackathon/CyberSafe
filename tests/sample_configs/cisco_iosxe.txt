@@ -1,0 +1,159 @@
+! ============================================================
+! Cisco IOS-XE Sample Configuration
+! Features: hostname, SSH, VLANs, interfaces, ACL, NAT,
+!           OSPF, static routing, logging, NTP, QoS
+! ============================================================
+
+hostname CORP-RTR-01
+!
+! SSH Configuration
+ip ssh version 2
+ip ssh time-out 60
+ip ssh authentication-retries 3
+crypto key generate rsa modulus 2048
+!
+! Domain name for SSH key generation
+ip domain-name corp.example.com
+!
+! VLANs
+vlan 10
+ name MANAGEMENT
+vlan 20
+ name SERVERS
+vlan 30
+ name USERS
+vlan 99
+ name NATIVE
+!
+! Interfaces
+interface GigabitEthernet0/0
+ description UPLINK_TO_ISP
+ ip address 203.0.113.1 255.255.255.0
+ no shutdown
+!
+interface GigabitEthernet0/1
+ description LAN_VLAN10_MANAGEMENT
+ switchport mode access
+ switchport access vlan 10
+ no shutdown
+!
+interface GigabitEthernet0/2
+ description LAN_VLAN20_SERVERS
+ switchport mode access
+ switchport access vlan 20
+ no shutdown
+!
+interface GigabitEthernet0/3
+ description TRUNK_TO_SWITCH
+ switchport mode trunk
+ switchport trunk native vlan 99
+ switchport trunk allowed vlan 10,20,30
+ no shutdown
+!
+interface Vlan10
+ description MANAGEMENT_VLAN
+ ip address 10.0.10.1 255.255.255.0
+ no shutdown
+!
+interface Vlan20
+ description SERVERS_VLAN
+ ip address 10.0.20.1 255.255.255.0
+ no shutdown
+!
+interface Vlan30
+ description USERS_VLAN
+ ip address 10.0.30.1 255.255.255.0
+ no shutdown
+!
+! Static Routes
+ip route 0.0.0.0 0.0.0.0 203.0.113.254
+ip route 10.0.100.0 255.255.255.0 10.0.10.254
+!
+! OSPF Routing
+router ospf 1
+ router-id 1.1.1.1
+ network 10.0.10.0 0.0.0.255 area 0
+ network 10.0.20.0 0.0.0.255 area 0
+ network 10.0.30.0 0.0.0.255 area 0
+ network 203.0.113.0 0.0.0.255 area 0
+!
+! ACL - Extended (Tier 2)
+ip access-list extended PERMIT_MANAGEMENT
+ permit ip 10.0.10.0 0.0.0.255 any
+ permit tcp any host 10.0.20.10 eq 22
+ deny ip any any log
+!
+ip access-list extended RESTRICT_SERVERS
+ permit tcp 10.0.30.0 0.0.0.255 host 10.0.20.10 eq 443
+ permit tcp 10.0.30.0 0.0.0.255 host 10.0.20.11 eq 443
+ deny ip any any log
+!
+! NAT Configuration (Tier 2)
+ip nat inside source list NAT_ACL interface GigabitEthernet0/0 overload
+ip nat pool MY_POOL 203.0.113.10 203.0.113.20 netmask 255.255.255.0
+ip access-list standard NAT_ACL
+ permit 10.0.10.0 0.0.0.255
+ permit 10.0.20.0 0.0.0.255
+ permit 10.0.30.0 0.0.0.255
+!
+interface GigabitEthernet0/0
+ ip nat outside
+!
+interface Vlan10
+ ip nat inside
+!
+interface Vlan20
+ ip nat inside
+!
+interface Vlan30
+ ip nat inside
+!
+! Logging
+logging host 10.0.10.100
+logging trap informational
+logging buffered 64000
+service timestamps log datetime msec
+logging source-interface Vlan10
+!
+! NTP
+ntp server 10.0.10.10
+ntp server 10.0.10.11 prefer
+!
+! QoS - Class Maps and Policy Maps (Tier 3 - Not Supported)
+class-map match-all VOICE
+ match dscp ef
+!
+class-map match-any CRITICAL_DATA
+ match dscp af31
+ match dscp af32
+!
+policy-map WAN_POLICY
+ class VOICE
+  priority percent 30
+ class CRITICAL_DATA
+  bandwidth percent 40
+ class class-default
+  fair-queue
+!
+interface GigabitEthernet0/0
+ service-policy output WAN_POLICY
+!
+! AAA
+aaa new-model
+tacacs-server host 10.0.10.200
+tacacs-server key SecretKey123
+aaa authentication login default group tacacs+ local
+aaa authorization exec default group tacacs+ local
+!
+! Line Configuration
+line console 0
+ logging synchronous
+ exec-timeout 5 0
+ login local
+line vty 0 15
+ exec-timeout 10 0
+ login local
+ transport input ssh
+ access-class PERMIT_MANAGEMENT in
+!
+end

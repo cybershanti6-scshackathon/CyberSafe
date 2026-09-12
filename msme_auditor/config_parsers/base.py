@@ -378,3 +378,4 @@ def run_parser(parser_id: str, config_text: str) -> ParseResult:
     if not parser:
         raise ValueError(f"Unknown parser: {parser_id}")
     return parser.parse(config_text)
+    

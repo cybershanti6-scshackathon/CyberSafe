@@ -56,6 +56,8 @@ class BridgeResult:
     rpp3_config: Dict[str, Any] = field(default_factory=dict)
     rpp4_config: Dict[str, Any] = field(default_factory=dict)
     nes1_config: Dict[str, Any] = field(default_factory=dict)
+    nes3_config: Dict[str, Any] = field(default_factory=dict)
+    nes4_config: Dict[str, Any] = field(default_factory=dict)
 
     # Evidence: maps parameter_name → {source, line_number, original_command}
     evidence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -83,6 +85,8 @@ class BridgeResult:
             "rpp3_config": self.rpp3_config,
             "rpp4_config": self.rpp4_config,
             "nes1_config": self.nes1_config,
+            "nes3_config": self.nes3_config,
+            "nes4_config": self.nes4_config,
             "evidence": self.evidence,
             "unknown_count": len(self.unknown_configurations),
             "unknowns": [u.to_dict() for u in self.unknown_configurations],
@@ -201,6 +205,28 @@ def build_scanner_configs(norm_result: NormalizationResult) -> BridgeResult:
     _add_evidence(bridge, "logging_enabled", log.logging_enabled, config)
     _add_evidence(bridge, "remote_syslog_enabled", log.remote_syslog_enabled, config)
 
+    # ========================================================================
+    # NES.3 — VPN / Remote Access (from config, not live scan)
+    # ========================================================================
+    # VPN config is partially available from device config
+    # IKE/IPSec detection comes from crypto commands in Cisco parser
+    bridge.nes3_config = {
+        "vpn_mfa_enabled": auth.mfa_enabled or False,
+        "vpn_encryption_enabled": enc.tls_enabled or enc.ssh_ciphers_strong or False,
+    }
+
+    _add_evidence(bridge, "tls_enabled", enc.tls_enabled, config)
+    _add_evidence(bridge, "ssh_ciphers_strong", enc.ssh_ciphers_strong, config)
+
+    # ========================================================================
+    # NES.4 — Email Security (from config, not live scan)
+    # ========================================================================
+    # NES.4 requires DNS checks which cannot be done from device config alone.
+    # We provide what we can from the config.
+    bridge.nes4_config = {
+        "domain": config.device.hostname or "",
+    }
+
     return bridge
 
 
@@ -221,6 +247,8 @@ def build_all_scanner_configs(norm_result: NormalizationResult) -> Dict[str, Dic
         "rpp2": bridge.rpp2_config,
         "rpp3": bridge.rpp3_config,
         "rpp4": bridge.rpp4_config,
+        "nes1": bridge.nes1_config,
+        "nes3": bridge.nes3_config,
     }
 
 

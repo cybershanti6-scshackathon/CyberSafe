@@ -242,7 +242,7 @@ class CertInAuditResult:
 # =============================================================================
 
 # Scanner IDs to run against normalized config
-_DEFAULT_SCANNERS = ["rpp1", "rpp2", "rpp3", "rpp4"]
+_DEFAULT_SCANNERS = ["rpp1", "rpp2", "rpp3", "rpp4", "nes1", "nes3"]
 
 # Check ID → Normalized Parameter mapping
 # Used to build evidence chains from CERT-In findings back to config
@@ -335,6 +335,8 @@ def run_certin_from_config(
         "rpp2": bridge.rpp2_config,
         "rpp3": bridge.rpp3_config,
         "rpp4": bridge.rpp4_config,
+        "nes1": bridge.nes1_config,
+        "nes3": bridge.nes3_config,
     }
 
     for scanner_id in scanner_ids:
@@ -409,6 +411,8 @@ def run_certin_from_config_verbose(
         "rpp2": bridge.rpp2_config,
         "rpp3": bridge.rpp3_config,
         "rpp4": bridge.rpp4_config,
+        "nes1": bridge.nes1_config,
+        "nes3": bridge.nes3_config,
     }
 
     for scanner_id in scanner_ids:

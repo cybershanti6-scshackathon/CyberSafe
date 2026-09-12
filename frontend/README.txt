@@ -7,7 +7,6 @@ Files:
 - rpp.html
 - nes.html
 - web-security.html
-- devices-vendors.html
 - ai-assistant.html
 - reports.html
 - styles.css
@@ -29,7 +28,6 @@ IMPORTANT:
 
 PROJECT MODULES IMPLEMENTED:
 Dashboard
-Devices & Vendors (AI-driven multi-vendor network security compliance auditor UI)
 NES
 RPP
 Web Security
