@@ -115,8 +115,9 @@
 }
 .info-card.source-card .tag { background: #dff7fc; color: #0ea5c6; }
 .info-card.target-card .tag { background: #dcfce7; color: #16a34a; }
-@media(max-width: 800px) {
+@media(max-width: 900px) {
   .info-cards { grid-template-columns: 1fr; }
+  .vendor-row { gap: 10px; }
 }
 
 /* Review items */
@@ -131,9 +132,17 @@
 .review-reason { font-size: 11px; color: var(--muted); margin-top: 3px; font-family: Inter, sans-serif; }
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-@media(max-width: 800px) {
+@media(max-width: 900px) {
   .editor-pair { grid-template-columns: 1fr; }
-
+  .vendor-select { min-width: 140px; font-size: 13px; }
+}
+@media(max-width: 600px) {
+  .editor-textarea { min-height: 220px; }
+  .conv-header h1 { font-size: 22px; }
+  .vendor-select { min-width: 120px; font-size: 12px; padding: 8px 14px; }
+  .btn-row { flex-direction: column; }
+  .convert-btn { width: 100%; justify-content: center; }
+  .small-btn { width: 100%; justify-content: center; }
 }
 </style>
 </head>

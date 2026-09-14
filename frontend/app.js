@@ -63,7 +63,7 @@ function injectShell() {
     <div class="main" id="main">
       <header class="topbar">
         <div class="toolbar">
-          <button class="icon-btn mobile-menu" id="mobileMenu" aria-label="Open menu"><span class="material-symbols-outlined">menu</span></button>
+          <button class="icon-btn mobile-menu" id="mobileMenu" aria-label="Open menu"><span class="hamburger-icon"><span></span><span></span><span></span></span></button>
           <span class="eyebrow">CyberSure Security Platform</span>
         </div>
         <div class="toolbar">
@@ -97,13 +97,16 @@ function setupShell() {
 
   mobile?.addEventListener("click", () => {
     sidebar.classList.add("open"); overlay.classList.add("show");
+    mobile.classList.add("active");
   });
   overlay?.addEventListener("click", () => {
     sidebar.classList.remove("open"); overlay.classList.remove("show");
+    mobile.classList.remove("active");
   });
   collapse?.addEventListener("click", () => {
     if (window.innerWidth <= 900) {
       sidebar.classList.remove("open"); overlay.classList.remove("show");
+      mobile?.classList.remove("active");
     } else {
       sidebar.classList.toggle("collapsed");
       localStorage.setItem("cybersure-sidebar-collapsed", sidebar.classList.contains("collapsed"));
@@ -112,7 +115,7 @@ function setupShell() {
   if (window.innerWidth > 900 && localStorage.getItem("cybersure-sidebar-collapsed") === "true") sidebar.classList.add("collapsed");
 
   sidebar.querySelectorAll("a[data-route]").forEach(a => {
-    a.addEventListener("click", () => { if (window.innerWidth <= 900) { sidebar.classList.remove("open"); overlay.classList.remove("show") } });
+    a.addEventListener("click", () => { if (window.innerWidth <= 900) { sidebar.classList.remove("open"); overlay.classList.remove("show"); mobile?.classList.remove("active") } });
   });
 }
 
