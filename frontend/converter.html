@@ -129,7 +129,13 @@
 }
 .review-item.tier2 { background: #fef3c7; border-left: 3px solid #d97706; }
 .review-item.tier3 { background: #fee2e2; border-left: 3px solid #dc2626; }
+.review-item.not_supported { background: #f3e8ff; border-left: 3px solid #9333ea; }
 .review-reason { font-size: 11px; color: var(--muted); margin-top: 3px; font-family: Inter, sans-serif; }
+.review-item-header { display: flex; align-items: center; gap: 6px; }
+.review-item-header .material-symbols-outlined { font-size: 14px; flex-shrink: 0; }
+.tier2 .review-item-header .material-symbols-outlined { color: #d97706; }
+.tier3 .review-item-header .material-symbols-outlined { color: #dc2626; }
+.not_supported .review-item-header .material-symbols-outlined { color: #9333ea; }
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @media(max-width: 900px) {
@@ -317,11 +323,34 @@ convertBtn.addEventListener('click', async () => {
     document.getElementById('statTime').textContent = t >= 1000 ? (t/1000).toFixed(1)+'s' : Math.round(t)+'ms';
     statsRow.style.display = 'flex';
 
-    const flagged = result.lines.filter(l => l.status === 'needs_review' || l.status === 'not_supported');
-    if (flagged.length) {
-      reviewList.innerHTML = flagged.map(i =>
-        `<div class="review-item ${i.tier}"><code>${esc(i.converted)}</code>${i.reason ? `<div class="review-reason">${esc(i.reason)}</div>` : ''}</div>`
-      ).join('');
+    // Merge output-line flags and structured review_items into one list
+    const lineFlags = result.lines.filter(l => l.status === 'needs_review' || l.status === 'not_supported');
+    const structuredItems = result.review_items || [];
+
+    // Deduplicate by 'converted' text to avoid double-counting
+    const allFlagged = [...structuredItems];
+    const structuredTexts = new Set(structuredItems.map(i => i.converted));
+    for (const l of lineFlags) {
+      if (!structuredTexts.has(l.converted)) allFlagged.push(l);
+    }
+
+    if (allFlagged.length) {
+      const iconFor = {
+        tier2: 'warning',
+        tier3: 'error',
+        not_supported: 'block',
+      };
+      reviewList.innerHTML = allFlagged.map(i => {
+        const icon = iconFor[i.tier] || iconFor[i.status] || 'info';
+        const cls = i.tier === 'tier3' ? 'tier3' : (i.status === 'not_supported' ? 'not_supported' : (i.tier || 'tier2'));
+        return `<div class="review-item ${cls}">
+          <div class="review-item-header">
+            <span class="material-symbols-outlined">${icon}</span>
+            <code>${esc(i.converted)}</code>
+          </div>
+          ${i.reason ? `<div class="review-reason">${esc(i.reason)}</div>` : ''}
+        </div>`;
+      }).join('');
       reviewSection.style.display = '';
     } else {
       reviewSection.style.display = 'none';

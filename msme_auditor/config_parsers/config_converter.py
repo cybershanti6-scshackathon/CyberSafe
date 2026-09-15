@@ -167,6 +167,10 @@ class NormConfig:
     qos_policy_maps: list = field(default_factory=list)
     sys_config: NormSysConfig = field(default_factory=NormSysConfig)
     flagged: list = field(default_factory=list)
+    # Lines from the input that did not match any parser rule (dropped/unrecognized)
+    skipped_lines: list = field(default_factory=list)
+    # Parser-generated review notes (security warnings, semantic issues)
+    review_notes: list = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -191,6 +195,18 @@ CISCO_TO_JUNOS_IFACE_PREFIX = {
     "Loopback": "lo",
     "Tunnel": "ip-",
     "Port-channel": "ae",
+}
+
+# Junos interface prefix → Cisco interface prefix (reverse mapping)
+JUNOS_TO_CISCO_IFACE_PREFIX = {
+    "ge": "GigabitEthernet",
+    "fe": "FastEthernet",
+    "xe": "TenGigabitEthernet",
+    "et": "FortyGigabitEthernet",
+    "se": "Serial",
+    "lo": "Loopback",
+    "ae": "Port-channel",
+    "irb": "Vlan",
 }
 
 
@@ -271,6 +287,42 @@ def validate_no_contradictions(junos_lines: list[str]) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Validation & Boilerplate Helpers
+# --------------------------------------------------------------------------
+
+def _is_valid_ipv4(ip_str: str) -> bool:
+    """Return True if ip_str is a valid standard IPv4 decimal dotted quad."""
+    try:
+        parts = ip_str.split('.')
+        if len(parts) != 4:
+            return False
+        return all(0 <= int(p) <= 255 for p in parts)
+    except (ValueError, AttributeError):
+        return False
+
+
+_CISCO_BOILERPLATE = re.compile(
+    r'^(?:!|#|end|exit|version\s+\S+|service\s+.*|no\s+service\s+.*|'
+    r'boot-start-marker|boot-end-marker|no\s+aaa\s+new-model|'
+    r'spanning-tree\s+.*|redundancy|ip\s+classless|ip\s+subnet-zero|'
+    r'ip\s+routing|no\s+ip\s+routing|ip\s+forward-protocol\s+.*|'
+    r'ip\s+http\s+.*|no\s+ip\s+http\s+.*|line\s+(?:con|aux|vty)\s+.*|'
+    r'transport\s+(?:input|output)\s+.*|login\s*.*|exec-timeout\s+.*|'
+    r'privilege\s+.*|password\s+.*|username\s+.*|enable\s+(?:secret|password)\s+.*|'
+    r'banner\s+.*|alias\s+.*|control-plane|duplex\s+.*|speed\s+.*|'
+    r'negotiation\s+auto|no\s+negotiation\s+auto|cdp\s+enable|no\s+cdp\s+enable|'
+    r'mtu\s+\d+|channel-group\s+\d+.*|standby\s+.*|ip\s+helper-address\s+.*|'
+    r'media-type\s+.*|load-interval\s+.*|no\s+ip\s+address|'
+    r'passive-interface\s+.*|default-information\s+.*|redistribute\s+.*|'
+    r'auto-cost\s+.*|log-adjacency-changes.*|state\s+(?:active|suspend)|'
+    r'switchport\s+nonegotiate|switchport\s+voice\s+vlan\s+\d+|'
+    r'storm-control\s+.*|keepalive\s+.*|no\s+keepalive|ip\s+directed-broadcast|'
+    r'remark\s+.*)',
+    re.I
+)
+
+
+# --------------------------------------------------------------------------
 # Cisco IOS XE Parser (Enhanced)
 # --------------------------------------------------------------------------
 
@@ -289,6 +341,32 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
     in_policy_map = False
     in_policy_class_block = False
 
+    def _flush_blocks():
+        nonlocal cur_iface, cur_vlan, cur_acl, cur_class_map, cur_policy_map
+        if cur_iface:
+            existing_idx = -1
+            for i, existing in enumerate(cfg.interfaces):
+                if existing.index == cur_iface.index:
+                    existing_idx = i
+                    break
+            if existing_idx >= 0:
+                cfg.interfaces[existing_idx] = cur_iface
+            else:
+                cfg.interfaces.append(cur_iface)
+            cur_iface = None
+        if cur_vlan:
+            cfg.vlans.append(cur_vlan)
+            cur_vlan = None
+        if cur_acl:
+            cfg.acls.append(cur_acl)
+            cur_acl = None
+        if cur_class_map:
+            cfg.qos_class_maps.append(cur_class_map)
+            cur_class_map = None
+        if cur_policy_map:
+            cfg.qos_policy_maps.append(cur_policy_map)
+            cur_policy_map = None
+
     lines = text.split('\n')
 
     for raw in lines:
@@ -297,15 +375,25 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
         if not trimmed:
             continue
 
-        # Track OSPF router section
-        if re.match(r'^router\s+ospf\s+(\d+)', trimmed, re.I):
-            m = re.match(r'^router\s+ospf\s+(\d+)', trimmed, re.I)
+        # Comment or section delimiter
+        if trimmed.startswith('!') or trimmed.startswith('#') or trimmed in ('exit', 'end'):
+            _flush_blocks()
+            in_router_ospf = False
+            in_class_map = False
+            in_policy_map = False
+            in_policy_class_block = False
+            continue
+
+        # Top-level: OSPF router section
+        m = re.match(r'^router\s+ospf\s+(\d+)', trimmed, re.I)
+        if m:
+            _flush_blocks()
             cfg.ospf_config = NormOspfConfig(process_id=m.group(1))
             in_router_ospf = True
             continue
 
         if in_router_ospf:
-            if trimmed.startswith('!') or trimmed.startswith('router ') and not trimmed.startswith('router ospf'):
+            if re.match(r'^(?:interface|router|vlan|hostname|ip\s+|ntp|logging|tacacs|aaa|line)\s+', trimmed, re.I):
                 in_router_ospf = False
             else:
                 if cfg.ospf_config:
@@ -321,39 +409,44 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                             area=m.group(3)
                         ))
                         continue
+                if _CISCO_BOILERPLATE.match(trimmed):
+                    continue
+                cfg.skipped_lines.append(trimmed)
                 continue
 
-        # Track class-map section
+        # Top-level: class-map section
         m = re.match(r'^class-map\s+(match-all|match-any)\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cur_class_map = NormQosClassMap(name=m.group(2), match_type=m.group(1))
             in_class_map = True
             continue
 
         if in_class_map:
-            if trimmed.startswith('!') or re.match(r'^(class-map|policy-map)\s+', trimmed, re.I):
-                if cur_class_map:
-                    cfg.qos_class_maps.append(cur_class_map)
-                    cur_class_map = None
+            if re.match(r'^(?:class-map|policy-map|interface|router|vlan|hostname|ip\s+|line)\s+', trimmed, re.I):
+                _flush_blocks()
                 in_class_map = False
             else:
                 m = re.match(r'^match\s+(?:dscp\s+)?(\S+)', trimmed, re.I)
                 if m and cur_class_map:
                     cur_class_map.match_criteria.append(('dscp', m.group(1)))
+                    continue
+                if _CISCO_BOILERPLATE.match(trimmed):
+                    continue
+                cfg.skipped_lines.append(trimmed)
                 continue
 
-        # Track policy-map section
+        # Top-level: policy-map section
         m = re.match(r'^policy-map\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cur_policy_map = NormQosPolicyMap(name=m.group(1))
             in_policy_map = True
             continue
 
         if in_policy_map:
-            if trimmed.startswith('!') or re.match(r'^policy-map\s+', trimmed, re.I):
-                if cur_policy_map:
-                    cfg.qos_policy_maps.append(cur_policy_map)
-                    cur_policy_map = None
+            if re.match(r'^(?:policy-map|class-map|interface|router|vlan|hostname|ip\s+|line)\s+', trimmed, re.I):
+                _flush_blocks()
                 in_policy_map = False
                 in_policy_class_block = False
             else:
@@ -363,7 +456,6 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                     in_policy_class_block = True
                     continue
                 if in_policy_class_block and cur_policy_map and cur_policy_class:
-                    # Parse policy actions
                     actions = []
                     if re.match(r'^priority\s+', trimmed, re.I):
                         m = re.match(r'^priority\s+(?:percent\s+)?(\d+)', trimmed, re.I)
@@ -375,162 +467,150 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                             actions.append(('bandwidth', m.group(1)))
                     elif re.match(r'^fair-queue', trimmed, re.I):
                         actions.append(('fair-queue', 'true'))
-
                     if actions:
                         cur_policy_map.classes.append((cur_policy_class, actions))
+                        continue
+                if _CISCO_BOILERPLATE.match(trimmed):
+                    continue
+                cfg.skipped_lines.append(trimmed)
                 continue
 
-        # VLAN definitions
-        if trimmed in ('!', 'exit'):
-            if cur_iface:
-                cfg.interfaces.append(cur_iface)
-                cur_iface = None
-            if cur_vlan:
-                cfg.vlans.append(cur_vlan)
-                cur_vlan = None
-            if cur_acl:
-                cfg.acls.append(cur_acl)
-                cur_acl = None
-            continue
-
-        # Hostname
+        # Top-level: Hostname
         m = re.match(r'^hostname\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.hostname = m.group(1)
             cfg.sys_config.hostname = m.group(1)
             continue
 
-        # Domain name
+        # Top-level: Domain name
         m = re.match(r'^ip\s+domain-name\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.domain_name = m.group(1)
             continue
 
-        # SSH configuration
+        # Top-level: SSH configuration
         m = re.match(r'^ip\s+ssh\s+version\s+(\d+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.ssh_enabled = True
             cfg.sys_config.ssh_version = int(m.group(1))
             continue
 
         m = re.match(r'^ip\s+ssh\s+time-out\s+(\d+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.ssh_timeout = int(m.group(1))
             cfg.sys_config.ssh_enabled = True
             continue
 
         m = re.match(r'^ip\s+ssh\s+authentication-retries\s+(\d+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.ssh_retries = int(m.group(1))
             cfg.sys_config.ssh_enabled = True
             continue
 
         if re.match(r'^crypto\s+key\s+generate\s+rsa', trimmed, re.I):
+            _flush_blocks()
             cfg.sys_config.ssh_enabled = True
             continue
 
-        # NTP servers
+        # Top-level: NTP servers
         m = re.match(r'^ntp\s+server\s+(\S+)(?:\s+prefer)?', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.ntp_servers.append(m.group(1))
             continue
 
-        # Syslog configuration
+        # Top-level: Syslog configuration
         m = re.match(r'^logging\s+host\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.syslog_hosts.append(m.group(1))
             continue
 
         m = re.match(r'^logging\s+trap\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.syslog_level = m.group(1)
             continue
 
         m = re.match(r'^logging\s+buffered\s+(\d+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.syslog_buffered_size = int(m.group(1))
             continue
 
         m = re.match(r'^logging\s+source-interface\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.syslog_source_interface = m.group(1)
             continue
 
-        # TACACS configuration
+        # Top-level: TACACS configuration
         m = re.match(r'^tacacs-server\s+host\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.tacacs_servers.append(m.group(1))
             continue
 
         m = re.match(r'^tacacs-server\s+key\s+(?:\d+\s+)?(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.tacacs_key = m.group(1)
             continue
 
-        # AAA configuration
+        # Top-level: AAA configuration
         m = re.match(r'^aaa\s+authentication\s+login\s+\S+\s+(.+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.aaa_auth_login = m.group(1)
             continue
 
         m = re.match(r'^aaa\s+authorization\s+exec\s+\S+\s+(.+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.sys_config.aaa_auth_exec = m.group(1)
             continue
 
-        # Static routes
+        # Top-level: Static routes
         m = re.match(r'^ip\s+route\s+(\S+)\s+(\S+)\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.static_routes.append(NormStaticRoute(
-                prefix=m.group(1),
-                mask=m.group(2),
+                network=m.group(1),
+                netmask=m.group(2),
                 next_hop=m.group(3)
             ))
             continue
 
-        # VLANs
+        # Top-level: VLANs
         m = re.match(r'^vlan\s+(\d+)', trimmed, re.I)
         if m:
-            if cur_vlan:
-                cfg.vlans.append(cur_vlan)
+            _flush_blocks()
             cur_vlan = NormVlan(id=m.group(1))
             continue
 
         if cur_vlan:
-            m = re.match(r'^name\s+(.+)$', trimmed, re.I)
+            m = re.match(r'^name\s+(\S+)', trimmed, re.I)
             if m:
                 cur_vlan.name = m.group(1)
                 continue
 
-        # Interfaces
+        # Top-level: Interfaces
         m = re.match(r'^interface\s+(\S+)\s*$', trimmed, re.I)
         if m:
-            # Check if we have a current interface to save
-            if cur_iface:
-                # Check if this interface already exists in the config
-                existing_idx = -1
-                for i, existing in enumerate(cfg.interfaces):
-                    if existing.index == cur_iface.index:
-                        existing_idx = i
-                        break
-
-                if existing_idx >= 0:
-                    # Update existing interface
-                    cfg.interfaces[existing_idx] = cur_iface
-                else:
-                    # Add new interface
-                    cfg.interfaces.append(cur_iface)
-
+            _flush_blocks()
             iface_name = m.group(1)
             is_vlan_svi = iface_name.lower().startswith('vlan')
             vlan_id = None
-
             if is_vlan_svi:
                 vlan_id_match = re.match(r'vlan(\d+)', iface_name, re.I)
                 if vlan_id_match:
                     vlan_id = int(vlan_id_match.group(1))
 
-            # Check if this interface already exists
             existing_iface = None
             for existing in cfg.interfaces:
                 if existing.index == iface_name:
@@ -538,10 +618,8 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                     break
 
             if existing_iface:
-                # Use existing interface
                 cur_iface = existing_iface
             else:
-                # Create new interface
                 cur_iface = NormInterface(
                     index=iface_name,
                     enabled=False,
@@ -550,21 +628,24 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                 )
             continue
 
+        # Sub-commands inside an interface
         if cur_iface:
-            # Interface description
             m = re.match(r'^description\s+(.+)$', trimmed, re.I)
             if m:
                 cur_iface.description = m.group(1)
                 continue
 
-            # IP address
             m = re.match(r'^ip\s+address\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)', trimmed, re.I)
             if m:
-                cur_iface.ip = m.group(1)
-                cur_iface.mask = m.group(2)
+                ip_val = m.group(1)
+                mask_val = m.group(2)
+                if not _is_valid_ipv4(ip_val) or not _is_valid_ipv4(mask_val):
+                    cfg.skipped_lines.append(f"{trimmed} (Invalid IPv4 address or subnet mask)")
+                    continue
+                cur_iface.ip = ip_val
+                cur_iface.mask = mask_val
                 continue
 
-            # Shutdown status
             if re.match(r'^no\s+shutdown', trimmed, re.I):
                 cur_iface.enabled = True
                 continue
@@ -572,31 +653,26 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                 cur_iface.enabled = False
                 continue
 
-            # Switchport mode
             m = re.match(r'^switchport\s+mode\s+(access|trunk)', trimmed, re.I)
             if m:
                 cur_iface.switchport_mode = m.group(1).lower()
                 continue
 
-            # Switchport access vlan
             m = re.match(r'^switchport\s+access\s+vlan\s+(\d+)', trimmed, re.I)
             if m:
                 cur_iface.access_vlan = int(m.group(1))
                 continue
 
-            # Switchport trunk allowed vlan
             m = re.match(r'^switchport\s+trunk\s+allowed\s+vlan\s+(.+)$', trimmed, re.I)
             if m:
                 cur_iface.trunk_allowed_vlans = m.group(1)
                 continue
 
-            # Switchport trunk native vlan
             m = re.match(r'^switchport\s+trunk\s+native\s+vlan\s+(\d+)', trimmed, re.I)
             if m:
                 cur_iface.trunk_native_vlan = int(m.group(1))
                 continue
 
-            # NAT inside/outside
             if re.match(r'^ip\s+nat\s+inside', trimmed, re.I):
                 cur_iface.nat_inside = True
                 continue
@@ -604,7 +680,6 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                 cur_iface.nat_outside = True
                 continue
 
-            # ACL on interface
             m = re.match(r'^ip\s+access-group\s+(\S+)\s+(in|out)', trimmed, re.I)
             if m:
                 if m.group(2).lower() == 'in':
@@ -613,39 +688,39 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                     cur_iface.acl_out = m.group(1)
                 continue
 
-            # QoS service-policy on interface
             m = re.match(r'^service-policy\s+output\s+(\S+)', trimmed, re.I)
             if m:
                 cur_iface.qos_policy_out = m.group(1)
                 continue
 
-        # ACLs - extended
+            if _CISCO_BOILERPLATE.match(trimmed):
+                continue
+
+            # Unrecognized command under interface
+            cfg.skipped_lines.append(trimmed)
+            continue
+
+        # Top-level: ACLs - extended
         m = re.match(r'^ip\s+access-list\s+extended\s+(\S+)', trimmed, re.I)
         if m:
-            if cur_acl:
-                cfg.acls.append(cur_acl)
+            _flush_blocks()
             cur_acl = NormAcl(name=m.group(1), type='extended')
             continue
 
-        # ACLs - standard
+        # Top-level: ACLs - standard
         m = re.match(r'^ip\s+access-list\s+standard\s+(\S+)', trimmed, re.I)
         if m:
-            if cur_acl:
-                cfg.acls.append(cur_acl)
+            _flush_blocks()
             cur_acl = NormAcl(name=m.group(1), type='standard')
             continue
 
         # ACL rules (inside ACL block)
         if cur_acl:
-            # Extended ACL: permit/deny protocol src [wildcard] dest [wildcard] [operator port]
-            # Parse step by step to avoid greedy matching issues
             m = re.match(r'^(permit|deny)\s+(ip|tcp|udp|icmp)\s+(.+)$', trimmed, re.I)
             if m:
                 action = m.group(1).lower()
                 protocol = m.group(2).lower()
                 rest = m.group(3).strip()
-
-                # Parse source and destination
                 parts = rest.split()
                 source = parts[0] if parts else 'any'
                 source_wildcard = None
@@ -655,26 +730,17 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                 log = 'log' in trimmed.lower()
 
                 idx = 1
-                # Source wildcard (if next part is an IP-like pattern, not 'any' or 'host')
                 if idx < len(parts) and not parts[idx] in ('any', 'host') and re.match(r'^\d+\.', parts[idx]):
                     source_wildcard = parts[idx]
                     idx += 1
-
-                # Skip 'host' keyword
                 if idx < len(parts) and parts[idx] == 'host':
                     idx += 1
-
-                # Destination
                 if idx < len(parts):
                     dest = parts[idx]
                     idx += 1
-
-                # Destination wildcard
                 if idx < len(parts) and re.match(r'^\d+\.', parts[idx]):
                     dest_wildcard = parts[idx]
                     idx += 1
-
-                # Check for port specification (eq X)
                 if idx < len(parts):
                     if parts[idx] == 'eq' and idx + 1 < len(parts):
                         dest_port = parts[idx + 1]
@@ -692,7 +758,6 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                 cur_acl.rules.append(rule)
                 continue
 
-            # Standard ACL simpler format
             m = re.match(r'^(permit|deny)\s+(\S+)(?:\s+(\S+))?', trimmed, re.I)
             if m and cur_acl.type == 'standard':
                 rule = NormAclRule(
@@ -706,9 +771,15 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
                 cur_acl.rules.append(rule)
                 continue
 
-        # NAT pools
+            if _CISCO_BOILERPLATE.match(trimmed):
+                continue
+            cfg.skipped_lines.append(trimmed)
+            continue
+
+        # Top-level: NAT pools
         m = re.match(r'^ip\s+nat\s+pool\s+(\S+)\s+(\S+)\s+(\S+)\s+netmask\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.nat_pools.append(NormNatPool(
                 name=m.group(1),
                 start_ip=m.group(2),
@@ -717,9 +788,10 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
             ))
             continue
 
-        # NAT rules
+        # Top-level: NAT rules
         m = re.match(r'^ip\s+nat\s+inside\s+source\s+list\s+(\S+)\s+interface\s+(\S+)\s+overload', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.nat_rules.append(NormNatRule(
                 acl_name=m.group(1),
                 interface=m.group(2),
@@ -729,24 +801,18 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
 
         m = re.match(r'^ip\s+nat\s+inside\s+source\s+list\s+(\S+)\s+pool\s+(\S+)', trimmed, re.I)
         if m:
+            _flush_blocks()
             cfg.nat_rules.append(NormNatRule(
                 acl_name=m.group(1),
                 pool_name=m.group(2)
             ))
             continue
 
-    # Flush remaining items
-    if cur_iface:
-        cfg.interfaces.append(cur_iface)
-    if cur_vlan:
-        cfg.vlans.append(cur_vlan)
-    if cur_acl:
-        cfg.acls.append(cur_acl)
-    if cur_class_map:
-        cfg.qos_class_maps.append(cur_class_map)
-    if cur_policy_map:
-        cfg.qos_policy_maps.append(cur_policy_map)
+        # Check boilerplate; if not boilerplate, it's unrecognized/error
+        if not _CISCO_BOILERPLATE.match(trimmed):
+            cfg.skipped_lines.append(trimmed)
 
+    _flush_blocks()
     return cfg
 
 
@@ -764,16 +830,51 @@ def parse_junos(text: str) -> NormConfig:
         line = raw.strip()
         if not line:
             continue
+        # Comments and structural braces
+        if line.startswith('#') or line.startswith('/*') or line.endswith('*/') or line in ('{', '}'):
+            continue
+        if re.match(r'^(?:version\s+\S+;|##\s+Last\s+commit:)', line, re.I):
+            continue
 
         # Hostname
         m = re.match(r'^set\s+system\s+host-name\s+(\S+)', line, re.I)
         if m:
-            cfg.hostname = m.group(1)
-            cfg.sys_config.hostname = m.group(1)
+            cfg.hostname = m.group(1).rstrip(';')
+            cfg.sys_config.hostname = cfg.hostname
+            continue
+
+        # SSH
+        if re.match(r'^set\s+system\s+services\s+ssh', line, re.I):
+            cfg.sys_config.ssh_enabled = True
+            continue
+
+        # NTP
+        m = re.match(r'^set\s+system\s+ntp\s+server\s+(\S+)', line, re.I)
+        if m:
+            cfg.sys_config.ntp_servers.append(m.group(1).rstrip(';'))
+            continue
+
+        # Syslog
+        m = re.match(r'^set\s+system\s+syslog\s+host\s+(\S+)', line, re.I)
+        if m:
+            cfg.sys_config.syslog_hosts.append(m.group(1).rstrip(';'))
+            continue
+
+        # Static route
+        m = re.match(r'^set\s+routing-options\s+static\s+route\s+(\S+)\s+next-hop\s+(\S+)', line, re.I)
+        if m:
+            route_dest = m.group(1).rstrip(';')
+            next_hop = m.group(2).rstrip(';')
+            if '/' in route_dest:
+                pfx, pfx_len = route_dest.split('/', 1)
+                mask = CIDR_TO_MASK.get(pfx_len, '255.255.255.0')
+            else:
+                pfx, mask = route_dest, '255.255.255.255'
+            cfg.static_routes.append(NormStaticRoute(network=pfx, netmask=mask, next_hop=next_hop))
             continue
 
         # Interface description
-        m = re.match(r'^set\s+interfaces\s+(\S+)\s+description\s+"([^"]+)"', line, re.I)
+        m = re.match(r'^set\s+interfaces\s+(\S+)\s+description\s+"?([^";]+)"?', line, re.I)
         if m:
             idx = m.group(1)
             it = iface_map.setdefault(idx, NormInterface(index=idx, enabled=True))
@@ -786,10 +887,15 @@ def parse_junos(text: str) -> NormConfig:
             line, re.I
         )
         if m:
+            ip_val = m.group(2)
+            cidr_val = m.group(3)
+            if not _is_valid_ipv4(ip_val) or not (0 <= int(cidr_val) <= 32):
+                cfg.skipped_lines.append(f"{line} (Invalid IPv4 address or CIDR mask)")
+                continue
             idx = m.group(1)
             it = iface_map.setdefault(idx, NormInterface(index=idx, enabled=True))
-            it.ip = m.group(2)
-            it.mask = CIDR_TO_MASK.get(m.group(3), "255.255.255.0")
+            it.ip = ip_val
+            it.mask = CIDR_TO_MASK.get(cidr_val, "255.255.255.0")
             continue
 
         # Interface disable
@@ -805,6 +911,18 @@ def parse_junos(text: str) -> NormConfig:
         if m:
             vlan_map[m.group(2)] = NormVlan(id=m.group(2), name=m.group(1))
             continue
+
+        # Known benign Junos boilerplate
+        if re.match(r'^set\s+(?:system\s+(?:root-authentication|login|time-zone)|protocols\s+lldp|snmp|chassis)', line, re.I):
+            continue
+
+        # Flagged firewall/security in Junos
+        if re.match(r'^set\s+(?:firewall|security)', line, re.I):
+            cfg.flagged.append(line)
+            continue
+
+        # Anything else in Junos input is unrecognized or syntax error
+        cfg.skipped_lines.append(line)
 
     cfg.interfaces = list(iface_map.values())
     cfg.vlans = list(vlan_map.values())
@@ -822,11 +940,14 @@ def parse_fortios(text: str) -> NormConfig:
     cur_iface: Optional[NormInterface] = None
     cur_vlan: Optional[NormVlan] = None
     port_counter = 0
-    port_index_of: dict[str, str] = {}
+    port_index_of: dict[str, str] = {}   # forti_name -> numeric index string
+    port_origname: dict[str, str] = {}   # numeric index string -> original forti port name
 
     for raw in text.split('\n'):
         line = raw.strip()
         if not line:
+            continue
+        if line.startswith('#'):
             continue
 
         if re.match(r'^config\s+system\s+global', line, re.I):
@@ -842,6 +963,9 @@ def parse_fortios(text: str) -> NormConfig:
             context = "flagged"
             cfg.flagged.append(line)
             continue
+        if re.match(r'^config\s+', line, re.I):
+            context = "other_config"
+            continue
         if re.match(r'^end$', line, re.I):
             context = None
             continue
@@ -850,23 +974,36 @@ def parse_fortios(text: str) -> NormConfig:
             cfg.flagged.append(line)
             continue
 
+        if context == "other_config":
+            continue
+
         if context == "global":
-            m = re.match(r'^set\s+hostname\s+"([^"]+)"', line, re.I)
+            m = re.match(r'^set\s+hostname\s+"?([^"]+)"?', line, re.I)
             if m:
                 cfg.hostname = m.group(1)
                 cfg.sys_config.hostname = m.group(1)
+                continue
+            if re.match(r'^set\s+(?:timezone|admin-sport|admin-ssh-port|language)\s+', line, re.I):
+                continue
+            cfg.skipped_lines.append(line)
             continue
 
         if context == "interface":
-            m = re.match(r'^edit\s+"([^"]+)"', line, re.I)
+            m = re.match(r'^edit\s+"?([^"]+)"?', line, re.I)
             if m:
                 if cur_iface:
                     cfg.interfaces.append(cur_iface)
                 port_name = m.group(1)
                 if port_name not in port_index_of:
                     port_counter += 1
-                    port_index_of[port_name] = str(port_counter)
-                cur_iface = NormInterface(index=port_index_of[port_name], enabled=True)
+                    idx_str = str(port_counter)
+                    port_index_of[port_name] = idx_str
+                    port_origname[idx_str] = port_name
+                cur_iface = NormInterface(
+                    index=port_index_of[port_name],
+                    enabled=True,
+                    description=port_name
+                )
                 continue
             if re.match(r'^next$', line, re.I):
                 if cur_iface:
@@ -874,23 +1011,31 @@ def parse_fortios(text: str) -> NormConfig:
                 cur_iface = None
                 continue
             if cur_iface:
-                m = re.match(r'^set\s+alias\s+"([^"]+)"', line, re.I)
+                m = re.match(r'^set\s+alias\s+"?([^"]+)"?', line, re.I)
                 if m:
                     cur_iface.description = m.group(1)
                     continue
                 m = re.match(r'^set\s+ip\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)', line, re.I)
                 if m:
-                    cur_iface.ip = m.group(1)
-                    cur_iface.mask = m.group(2)
+                    ip_val = m.group(1)
+                    mask_val = m.group(2)
+                    if not _is_valid_ipv4(ip_val) or not _is_valid_ipv4(mask_val):
+                        cfg.skipped_lines.append(f"{line} (Invalid IPv4 address or netmask)")
+                        continue
+                    cur_iface.ip = ip_val
+                    cur_iface.mask = mask_val
                     continue
                 m = re.match(r'^set\s+status\s+(up|down)', line, re.I)
                 if m:
                     cur_iface.enabled = m.group(1).lower() == "up"
                     continue
-            continue
+                if re.match(r'^set\s+(?:vdom|mode|type|allowaccess|snmp-index|mtu-override|broadcast-forward)\s+', line, re.I):
+                    continue
+                cfg.skipped_lines.append(line)
+                continue
 
         if context == "vlan":
-            m = re.match(r'^edit\s+"([^"]+)"', line, re.I)
+            m = re.match(r'^edit\s+"?([^"]+)"?', line, re.I)
             if m:
                 if cur_vlan:
                     cfg.vlans.append(cur_vlan)
@@ -901,7 +1046,17 @@ def parse_fortios(text: str) -> NormConfig:
                     cfg.vlans.append(cur_vlan)
                 cur_vlan = None
                 continue
-            continue
+            if cur_vlan:
+                m = re.match(r'^set\s+vlanid\s+(\d+)', line, re.I)
+                if m:
+                    cur_vlan.id = m.group(1)
+                    continue
+                if re.match(r'^set\s+(?:interface|description)\s+', line, re.I):
+                    continue
+                cfg.skipped_lines.append(line)
+                continue
+
+        cfg.skipped_lines.append(line)
 
     if cur_iface:
         cfg.interfaces.append(cur_iface)
@@ -913,6 +1068,79 @@ def parse_fortios(text: str) -> NormConfig:
 # --------------------------------------------------------------------------
 # Cisco IOS XE Generator
 # --------------------------------------------------------------------------
+
+def _junos_iface_to_cisco(junos_iface: str) -> str:
+    """
+    Convert a Junos interface name to Cisco IOS XE format.
+    e.g. ge-0/0/0 -> GigabitEthernet0/0/0, irb.10 -> Vlan10, lo0 -> Loopback0
+    """
+    # Handle irb.X (routed VLAN) -> Vlan X
+    m = re.match(r'^irb\.(\d+)$', junos_iface, re.I)
+    if m:
+        return f"Vlan{m.group(1)}"
+
+    # Handle prefix-slot/subslot/port  e.g. ge-0/0/0
+    m = re.match(r'^([a-z]+)-([\d/]+)$', junos_iface, re.I)
+    if m:
+        prefix = m.group(1).lower()
+        nums = m.group(2)  # e.g. "0/0/0"
+        cisco_prefix = JUNOS_TO_CISCO_IFACE_PREFIX.get(prefix)
+        if cisco_prefix:
+            return f"{cisco_prefix}{nums}"
+
+    # Handle lo0 style (no slash)
+    m = re.match(r'^([a-z]+)(\d+)$', junos_iface, re.I)
+    if m:
+        prefix = m.group(1).lower()
+        num = m.group(2)
+        cisco_prefix = JUNOS_TO_CISCO_IFACE_PREFIX.get(prefix)
+        if cisco_prefix:
+            return f"{cisco_prefix}{num}"
+
+    # Fallback
+    return junos_iface
+
+
+def _forti_index_to_cisco(index: str) -> str:
+    """
+    Convert a FortiOS numeric interface index to a Cisco-style interface name.
+    e.g. '1' -> 'GigabitEthernet0/0', '2' -> 'GigabitEthernet0/1'
+    """
+    try:
+        n = int(index) - 1  # 0-based port
+        return f"GigabitEthernet0/{n}"
+    except (ValueError, TypeError):
+        return f"GigabitEthernet{index}"
+
+
+def _forti_index_to_junos(index: str) -> str:
+    """
+    Convert a FortiOS numeric interface index to a Junos-style interface name.
+    e.g. '1' -> 'ge-0/0/0', '2' -> 'ge-0/0/1'
+    """
+    try:
+        n = int(index) - 1  # 0-based port
+        return f"ge-0/0/{n}"
+    except (ValueError, TypeError):
+        return f"ge-0/0/{index}"
+
+
+def _smart_forti_port_name(index: str, description: Optional[str] = None) -> str:
+    """
+    Generate a clean FortiOS port name from an interface index.
+    Tries to use the description as port name if it looks like a port name,
+    otherwise uses port1, port2, etc.
+    """
+    # If description looks like a FortiOS built-in port name (portN, wanN, etc.), use it
+    if description and re.match(r'^(port|wan|dmz|lan|mgmt)\d*$', description, re.I):
+        return description
+    # Otherwise use portN numbering
+    try:
+        n = int(index)
+        return f"port{n}"
+    except (ValueError, TypeError):
+        return f"port{index}"
+
 
 def gen_cisco_iosxe(cfg: NormConfig) -> str:
     """Generate Cisco IOS XE configuration from normalized model."""
@@ -939,9 +1167,21 @@ def gen_cisco_iosxe(cfg: NormConfig) -> str:
             out.append(f" name {v.name}")
         out.append("!")
 
-    # Interfaces
+    # Interfaces — convert Junos / FortiOS index names to Cisco style
     for it in cfg.interfaces:
-        out.append(f"interface {it.index}")
+        # Determine the Cisco-style interface name
+        idx = it.index
+        if re.match(r'^\d+$', idx):
+            # FortiOS numeric index
+            cisco_name = _forti_index_to_cisco(idx)
+        elif re.match(r'^[a-z]+-[\d/]+$', idx, re.I) or re.match(r'^irb\.\d+$', idx, re.I):
+            # Junos-style name
+            cisco_name = _junos_iface_to_cisco(idx)
+        else:
+            # Already Cisco-style (or unknown)
+            cisco_name = idx
+
+        out.append(f"interface {cisco_name}")
         if it.description:
             out.append(f" description {it.description}")
         if it.ip and it.mask:
@@ -1125,9 +1365,19 @@ def gen_junos(cfg: NormConfig) -> str:
 
     out.append("")
 
-    # Interfaces
+    # Interfaces — convert any source naming to Junos style
     for it in cfg.interfaces:
-        junos_name, is_irb = cisco_iface_to_junos(it.index)
+        # Determine Junos name:
+        # - Cisco names like GigabitEthernet0/0 → ge-0/0/0 (via cisco_iface_to_junos)
+        # - FortiOS numeric index like "1", "2" → ge-0/0/0, ge-0/0/1
+        # - Already-Junos names pass through
+        idx = it.index
+        if re.match(r'^\d+$', idx):
+            # FortiOS numeric index → Junos name
+            junos_name = _forti_index_to_junos(idx)
+            is_irb = False
+        else:
+            junos_name, is_irb = cisco_iface_to_junos(idx)
 
         # For VLAN SVIs, we already created the l3-interface binding above
         # Now output the irb interface config
@@ -1423,11 +1673,29 @@ def gen_fortios(cfg: NormConfig) -> str:
 
     if cfg.interfaces:
         out.append("config system interface")
-        for it in cfg.interfaces:
-            port_num = re.sub(r"\D", "", it.index) or it.index
-            out.append(f'    edit "port{port_num}"')
-            if it.description:
-                out.append(f'        set alias "{it.description}"')
+        for i, it in enumerate(cfg.interfaces, start=1):
+            # Build a clean FortiOS port name from the source index
+            idx = it.index
+            if re.match(r'^\d+$', idx):
+                # Already a FortiOS numeric index → portN
+                port_name = _smart_forti_port_name(idx, it.description)
+            elif re.match(r'^[a-z]+-[\d/]+$', idx, re.I):
+                # Junos-style: ge-0/0/0 → extract last number as port index
+                nums = re.findall(r'\d+', idx)
+                port_name = f"port{int(nums[-1]) + 1}" if nums else f"port{i}"
+            elif re.match(r'^[A-Z][a-z]+', idx):
+                # Cisco-style: GigabitEthernet0/0 → extract trailing numbers
+                nums = re.findall(r'\d+', idx)
+                port_name = f"port{int(nums[-1]) + 1}" if nums else f"port{i}"
+            else:
+                port_name = f"port{i}"
+
+            # Description: don't repeat the port name if it's the same
+            desc = it.description if it.description and it.description != port_name else None
+
+            out.append(f'    edit "{port_name}"')
+            if desc:
+                out.append(f'        set alias "{desc}"')
             if it.ip and it.mask:
                 out.append(f"        set ip {it.ip} {it.mask}")
             out.append(f"        set status {'up' if it.enabled else 'down'}")
@@ -1435,9 +1703,10 @@ def gen_fortios(cfg: NormConfig) -> str:
         out.append("end")
 
     if cfg.vlans:
-        out.append("config system interface")
+        out.append("config system vlan")
         for v in cfg.vlans:
-            out.append(f'    edit "{v.name or "vlan" + v.id}"')
+            vlan_name = v.name or f"vlan{v.id}"
+            out.append(f'    edit "{vlan_name}"')
             out.append(f"        set vlanid {v.id}")
             out.append("    next")
         out.append("end")
@@ -1502,6 +1771,162 @@ def get_supported_pairs() -> list:
     return pairs
 
 
+# --------------------------------------------------------------------------
+# Security posture checker
+# --------------------------------------------------------------------------
+
+# Keywords that identify ACL/NAT/QoS/security output lines that should always
+# be flagged for human review even if syntactically converted correctly.
+_REVIEW_KEYWORDS = [
+    # Junos
+    "firewall family", "security nat", "class-of-service", "scheduler",
+    "firewall filter", "source-nat", "destination-nat",
+    # Cisco
+    "access-list", "ip nat", "policy-map", "class-map", "service-policy",
+    "route-map", "permit", "deny",
+    # FortiOS
+    "config firewall", "config router",
+]
+
+
+def _security_posture_review(normalized: NormConfig) -> list:
+    """
+    Inspect the parsed config and return a list of security/best-practice
+    review items that the operator should address before deployment.
+
+    Each item is a dict: {converted, status, tier, reason}
+    """
+    items = []
+
+    # ── SSH ────────────────────────────────────────────────────────────────
+    if not normalized.sys_config.ssh_enabled:
+        items.append({
+            "converted": "SSH not configured",
+            "status": "needs_review",
+            "tier": "tier3",
+            "reason": "SECURITY: No SSH configuration detected. Remote management without SSH is a risk.",
+        })
+    elif normalized.sys_config.ssh_version and normalized.sys_config.ssh_version < 2:
+        items.append({
+            "converted": f"SSH version {normalized.sys_config.ssh_version} in use",
+            "status": "needs_review",
+            "tier": "tier3",
+            "reason": "SECURITY: SSH v1 is deprecated and vulnerable. Upgrade to SSH v2.",
+        })
+
+    # ── Telnet ─────────────────────────────────────────────────────────────
+    if normalized.sys_config.telnet_enabled:
+        items.append({
+            "converted": "Telnet is enabled",
+            "status": "needs_review",
+            "tier": "tier3",
+            "reason": "CRITICAL: Telnet transmits credentials in plaintext. Disable telnet and use SSH.",
+        })
+
+    # ── NTP ────────────────────────────────────────────────────────────────
+    if not normalized.sys_config.ntp_servers:
+        items.append({
+            "converted": "No NTP servers configured",
+            "status": "needs_review",
+            "tier": "tier2",
+            "reason": "WARNING: Without NTP, log timestamps and certificate validity checks are unreliable.",
+        })
+
+    # ── Logging/Syslog ─────────────────────────────────────────────────────
+    if not normalized.sys_config.syslog_hosts:
+        items.append({
+            "converted": "No syslog server configured",
+            "status": "needs_review",
+            "tier": "tier2",
+            "reason": "WARNING: Centralized logging is required for incident detection and CERT-In compliance.",
+        })
+
+    # ── ACLs ───────────────────────────────────────────────────────────────
+    if normalized.acls:
+        for acl in normalized.acls:
+            items.append({
+                "converted": f"ACL '{acl.name}' ({len(acl.rules)} rules)",
+                "status": "needs_review",
+                "tier": "tier2",
+                "reason": "ACL converted structurally but rule semantics must be verified manually before deployment.",
+            })
+
+    # ── NAT ────────────────────────────────────────────────────────────────
+    if normalized.nat_pools or normalized.nat_rules:
+        items.append({
+            "converted": f"NAT config ({len(normalized.nat_rules)} rule(s), {len(normalized.nat_pools)} pool(s))",
+            "status": "needs_review",
+            "tier": "tier2",
+            "reason": "NAT translated structurally — verify inside/outside interface assignments and overload behaviour.",
+        })
+
+    # ── QoS ────────────────────────────────────────────────────────────────
+    if normalized.qos_class_maps or normalized.qos_policy_maps:
+        items.append({
+            "converted": f"QoS policy ({len(normalized.qos_policy_maps)} policy-map(s))",
+            "status": "needs_review",
+            "tier": "tier2",
+            "reason": "QoS scheduling/shaping values differ between vendors — verify queue mappings manually.",
+        })
+
+    # ── OSPF ───────────────────────────────────────────────────────────────
+    if normalized.ospf_config:
+        if not normalized.ospf_config.router_id:
+            items.append({
+                "converted": "OSPF router-id not set",
+                "status": "needs_review",
+                "tier": "tier2",
+                "reason": "WARNING: No explicit OSPF router-id — the router will auto-select one which can change on reboot.",
+            })
+
+    # ── Interfaces without IPs or descriptions ─────────────────────────────
+    for iface in normalized.interfaces:
+        if not iface.description:
+            items.append({
+                "converted": f"Interface {iface.index} has no description",
+                "status": "needs_review",
+                "tier": "tier2",
+                "reason": "BEST PRACTICE: All interfaces should have a description for operational clarity.",
+            })
+
+    # ── Skipped/unrecognized input lines ───────────────────────────────────
+    for skipped in normalized.skipped_lines:
+        if " (Invalid IPv4" in skipped:
+            cmd, reason = skipped.split(" (", 1)
+            clean_reason = reason.rstrip(")")
+            items.append({
+                "converted": cmd.strip(),
+                "status": "not_supported",
+                "tier": "tier3",
+                "reason": f"Syntax error: {clean_reason}",
+            })
+        else:
+            items.append({
+                "converted": skipped,
+                "status": "not_supported",
+                "tier": "tier3",
+                "reason": f"Syntax error or unrecognized command in uploaded configuration: '{skipped}' was not recognized and could not be converted.",
+            })
+
+    # ── Parser-flagged items (e.g. FortiOS firewall/router blocks) ──────────
+    for note in normalized.review_notes:
+        items.append({
+            "converted": note,
+            "status": "needs_review",
+            "tier": "tier2",
+            "reason": "Flagged by parser — requires manual review.",
+        })
+
+    return items
+
+
+def _is_review_line(line: str) -> bool:
+    """Return True if a converted output line represents ACL/NAT/QoS/security
+    content that should always be flagged for human review."""
+    low = line.lower()
+    return any(kw in low for kw in _REVIEW_KEYWORDS)
+
+
 def convert_config(source_vendor: str, target_vendor: str, config_text: str) -> dict:
     """Convert configuration from source vendor to target vendor."""
     source_vendor = _normalize_vendor(source_vendor)
@@ -1509,16 +1934,18 @@ def convert_config(source_vendor: str, target_vendor: str, config_text: str) -> 
 
     # Source == target → passthrough
     if source_vendor == target_vendor:
+        input_lines = [l for l in config_text.splitlines() if l.strip()]
         return {
             "output_config": config_text,
             "converted_config": config_text,
             "lines": [{"converted": l, "status": "converted", "tier": "tier1"}
-                       for l in config_text.splitlines() if l.strip()],
+                       for l in input_lines],
             "flagged_items": [],
             "flagged_count": 0,
-            "commands_converted": len([l for l in config_text.splitlines() if l.strip()]),
+            "commands_converted": len(input_lines),
             "commands_need_review": 0,
             "conversion_accuracy": 100,
+            "review_items": [],
         }
 
     if source_vendor not in _PARSERS:
@@ -1552,36 +1979,51 @@ def convert_config(source_vendor: str, target_vendor: str, config_text: str) -> 
 
     converted = _GENERATORS[target_vendor](normalized)
 
-    # Build per-line output with status info
+    # ── Build per-line output with status info ──────────────────────────────
     lines = []
     for line in converted.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
-        # Skip the "FLAGGED FOR MANUAL REVIEW" header emitted by the generators
+        # Skip generator-emitted section headers (not real commands)
         if "FLAGGED FOR MANUAL REVIEW" in stripped:
             continue
-        # Skip validation warnings section
         if "VALIDATION WARNINGS" in stripped:
             continue
         if stripped.startswith("# WARNING:") or stripped.startswith("# ERROR:"):
             continue
-        # A commented-out command ("! cmd" / "# cmd") is a flagged review item.
-        # A standalone "!" or "#" is just a structural separator — not a review item.
+
+        # Commented-out lines ("! cmd" / "# cmd") are explicit review items
         if (stripped.startswith("!") or stripped.startswith("#")) and len(stripped) > 1:
             raw_cmd = stripped.lstrip("!# ")
             if raw_cmd:
                 lines.append({
                     "converted": raw_cmd,
                     "status": "needs_review",
-                    "tier": "tier2" if any(kw in raw_cmd.upper() for kw in ["ACCESS-LIST", "NAT", "PERMIT", "DENY", "ROUTE-MAP", "CLASS-MAP", "POLICY-MAP", "SERVICE-POLICY"]) else "tier3",
-                    "reason": "Requires manual review — ACL/NAT/QoS rules should not be auto-converted",
+                    "tier": "tier2",
+                    "reason": "Requires manual review — complex rule not auto-converted",
                 })
+            continue
+
+        # ACL/NAT/QoS/security lines: always flag even if syntactically converted
+        if _is_review_line(stripped):
+            lines.append({
+                "converted": stripped,
+                "status": "needs_review",
+                "tier": "tier2",
+                "reason": "ACL/NAT/QoS/security directive — verify semantics before deployment",
+            })
         else:
             lines.append({"converted": stripped, "status": "converted", "tier": "tier1"})
 
+    # ── Security posture + unrecognized-line review items ───────────────────
+    review_items = _security_posture_review(normalized)
+
     converted_count = sum(1 for l in lines if l["status"] == "converted")
-    review_count = sum(1 for l in lines if l["status"] in ("needs_review", "not_supported"))
+    review_count = (
+        sum(1 for l in lines if l["status"] in ("needs_review", "not_supported"))
+        + len(review_items)
+    )
     total_count = converted_count + review_count
     accuracy = round(converted_count / total_count * 100) if total_count else 0
 
@@ -1594,4 +2036,6 @@ def convert_config(source_vendor: str, target_vendor: str, config_text: str) -> 
         "commands_converted": converted_count,
         "commands_need_review": review_count,
         "conversion_accuracy": accuracy,
+        # Structured review items shown in the UI review panel
+        "review_items": review_items,
     }
