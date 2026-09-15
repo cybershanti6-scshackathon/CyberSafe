@@ -1015,11 +1015,12 @@ def main() -> None:
     """Start the server with uvicorn (called by ``launch.py``)."""
     import uvicorn
 
+    port = int(os.environ.get("PORT", 8000))
     print("🛡️  MSME Cyber Auditor — Scanner API Server")
     print(f"   Registered scanners: {list(get_all_scanners().keys())}")
-    print(f"   Frontend: http://localhost:8000")
-    print(f"   API docs: http://localhost:8000/docs\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    print(f"   Frontend: http://localhost:{port}")
+    print(f"   API docs: http://localhost:{port}/docs\n")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
 if __name__ == "__main__":
