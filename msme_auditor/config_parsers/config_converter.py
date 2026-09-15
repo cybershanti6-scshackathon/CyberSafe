@@ -301,6 +301,56 @@ def _is_valid_ipv4(ip_str: str) -> bool:
         return False
 
 
+def _cidr_to_mask(cidr_str: str) -> str:
+    """Convert CIDR prefix length (0-32) to dotted decimal netmask."""
+    try:
+        n = int(str(cidr_str).strip())
+        if 0 <= n <= 32:
+            mask_int = (0xffffffff << (32 - n)) & 0xffffffff if n > 0 else 0
+            return f"{(mask_int >> 24) & 0xff}.{(mask_int >> 16) & 0xff}.{(mask_int >> 8) & 0xff}.{mask_int & 0xff}"
+    except Exception:
+        pass
+    return CIDR_TO_MASK.get(str(cidr_str).strip(), "255.255.255.0")
+
+
+def _mask_to_wildcard(mask_str: str) -> str:
+    """Convert dotted netmask (e.g. 255.255.255.0) to wildcard mask (0.0.0.255)."""
+    try:
+        parts = [int(p) for p in mask_str.strip().split('.')]
+        if len(parts) == 4:
+            return f"{255 - parts[0]}.{255 - parts[1]}.{255 - parts[2]}.{255 - parts[3]}"
+    except Exception:
+        pass
+    return "0.0.0.255"
+
+
+def _parse_ip_mask(ip_str: str) -> tuple[Optional[str], Optional[str]]:
+    """Parse 'IP MASK', 'IP/MASK', or 'IP/CIDR' into (ip, mask)."""
+    if not ip_str:
+        return None, None
+    ip_str = ip_str.strip().strip('"')
+    if ' ' in ip_str:
+        parts = ip_str.split()
+        if len(parts) >= 2:
+            ip, m = parts[0], parts[1]
+            if _is_valid_ipv4(ip):
+                if _is_valid_ipv4(m):
+                    return ip, m
+                elif m.isdigit() and 0 <= int(m) <= 32:
+                    return ip, _cidr_to_mask(m)
+    if '/' in ip_str:
+        parts = ip_str.split('/', 1)
+        ip, m = parts[0], parts[1]
+        if _is_valid_ipv4(ip):
+            if _is_valid_ipv4(m):
+                return ip, m
+            elif m.isdigit() and 0 <= int(m) <= 32:
+                return ip, _cidr_to_mask(m)
+    if _is_valid_ipv4(ip_str):
+        return ip_str, "255.255.255.255"
+    return None, None
+
+
 _CISCO_BOILERPLATE = re.compile(
     r'^(?:!|#|end|exit|version\s+\S+|service\s+.*|no\s+service\s+.*|'
     r'boot-start-marker|boot-end-marker|no\s+aaa\s+new-model|'
@@ -580,8 +630,8 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
         if m:
             _flush_blocks()
             cfg.static_routes.append(NormStaticRoute(
-                network=m.group(1),
-                netmask=m.group(2),
+                prefix=m.group(1),
+                mask=m.group(2),
                 next_hop=m.group(3)
             ))
             continue
@@ -820,20 +870,114 @@ def parse_cisco_iosxe(text: str) -> NormConfig:
 # Junos Parser
 # --------------------------------------------------------------------------
 
+def _junos_hierarchical_to_set(text: str) -> list[str]:
+    """
+    Convert Juniper hierarchical config format (curly-brace style) to flat 'set' commands.
+
+    Example input:
+        system {
+            host-name ROUTER1;
+            ntp { server 1.2.3.4; }
+        }
+    Example output:
+        ['set system host-name ROUTER1', 'set system ntp server 1.2.3.4']
+    """
+    set_lines: list[str] = []
+    path_stack: list[str] = []
+    # current multi-word token buffer when a brace follows on the next line
+    pending_tokens: list[str] = []
+
+    for raw in text.split('\n'):
+        line = raw.strip().rstrip(';')
+        if not line:
+            continue
+        # Comments / version boilerplate
+        if line.startswith('#') or line.startswith('/*') or line.endswith('*/'):
+            continue
+        if re.match(r'^(?:version\s+\S+|##)', line, re.I):
+            continue
+
+        # A line may have inline braces, e.g.:  "ntp { server 1.2.3.4; }"
+        # Expand inline { ... } to individual lines first
+        # Collapse the whole thing: push/pop in a single pass
+        tokens = line.split()
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i].rstrip(';')
+            if tok == '{':
+                # push accumulated pending tokens
+                if pending_tokens:
+                    path_stack.append(' '.join(pending_tokens))
+                    pending_tokens = []
+                i += 1
+            elif tok == '}':
+                if path_stack:
+                    path_stack.pop()
+                if pending_tokens:
+                    pending_tokens = []
+                i += 1
+            elif tok == 'inactive:' or tok == 'apply-groups':
+                # skip to end of this token group
+                break
+            else:
+                # Regular token — accumulate until { or } or end-of-line
+                pending_tokens.append(tok.rstrip(';'))
+                # peek ahead: if next is '{', this token-group IS a path segment
+                if i + 1 < len(tokens) and tokens[i + 1].lstrip() == '{':
+                    path_stack.append(' '.join(pending_tokens))
+                    pending_tokens = []
+                    i += 2  # skip past '{'
+                    continue
+                i += 1
+
+        # If we have accumulated tokens and no open brace follows, emit a set command
+        if pending_tokens:
+            full_path = ' '.join(path_stack + pending_tokens)
+            set_lines.append('set ' + full_path)
+            pending_tokens = []
+
+    return set_lines
+
+
 def parse_junos(text: str) -> NormConfig:
-    """Parse Juniper Junos configuration into normalized model."""
+    """Parse Juniper Junos configuration into normalized model.
+
+    Accepts both:
+    - Flat 'set' format:  set system host-name ROUTER
+    - Hierarchical format: system { host-name ROUTER; }
+    """
     cfg = NormConfig()
     iface_map: dict[str, NormInterface] = {}
     vlan_map: dict[str, NormVlan] = {}
 
-    for raw in text.split('\n'):
-        line = raw.strip()
+    # Auto-detect format: if the text has 'set ' lines, treat as flat.
+    # If it has curly braces but no 'set ', convert hierarchical → flat.
+    raw_lines = [l.strip() for l in text.split('\n') if l.strip()]
+    has_set_cmds = any(l.lower().startswith('set ') for l in raw_lines)
+    has_braces = any('{' in l or '}' in l for l in raw_lines)
+
+    if has_braces and not has_set_cmds:
+        # Pure hierarchical format — convert to set style first
+        flat_lines = _junos_hierarchical_to_set(text)
+    elif has_braces and has_set_cmds:
+        # Mixed — process set lines as-is, skip brace-only lines
+        flat_lines = [l for l in raw_lines if l.lower().startswith('set ')]
+    else:
+        # Already flat set-style
+        flat_lines = raw_lines
+
+    for line in flat_lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Strip trailing semicolons left over from hierarchical conversion
+        line = line.rstrip(';').strip()
         if not line:
             continue
         # Comments and structural braces
-        if line.startswith('#') or line.startswith('/*') or line.endswith('*/') or line in ('{', '}'):
+        if line.startswith('#') or line.startswith('/*') or line.endswith('*/'):
             continue
-        if re.match(r'^(?:version\s+\S+;|##\s+Last\s+commit:)', line, re.I):
+        if re.match(r'^(?:version\s+\S+|##\s+Last\s+commit:)', line, re.I):
             continue
 
         # Hostname
@@ -860,6 +1004,12 @@ def parse_junos(text: str) -> NormConfig:
             cfg.sys_config.syslog_hosts.append(m.group(1).rstrip(';'))
             continue
 
+        # TACACS+
+        m = re.match(r'^set\s+system\s+tacplus-server\s+(\S+)', line, re.I)
+        if m:
+            cfg.sys_config.tacacs_servers.append(m.group(1).rstrip(';'))
+            continue
+
         # Static route
         m = re.match(r'^set\s+routing-options\s+static\s+route\s+(\S+)\s+next-hop\s+(\S+)', line, re.I)
         if m:
@@ -867,28 +1017,68 @@ def parse_junos(text: str) -> NormConfig:
             next_hop = m.group(2).rstrip(';')
             if '/' in route_dest:
                 pfx, pfx_len = route_dest.split('/', 1)
+                pfx_len = pfx_len.rstrip(';')
                 mask = CIDR_TO_MASK.get(pfx_len, '255.255.255.0')
             else:
                 pfx, mask = route_dest, '255.255.255.255'
-            cfg.static_routes.append(NormStaticRoute(network=pfx, netmask=mask, next_hop=next_hop))
+            cfg.static_routes.append(NormStaticRoute(prefix=pfx, mask=mask, next_hop=next_hop))
             continue
 
-        # Interface description
-        m = re.match(r'^set\s+interfaces\s+(\S+)\s+description\s+"?([^";]+)"?', line, re.I)
+        # OSPF router-id
+        m = re.match(r'^set\s+protocols\s+ospf\s+area\s+(\S+)\s+interface\s+(\S+)', line, re.I)
+        if m:
+            if not cfg.ospf_config:
+                cfg.ospf_config = NormOspfConfig(process_id="1")
+            # Interface in OSPF area — just note it, not full parsing
+            continue
+
+        # Interface description  (handles both "ge-0/0/0" and "ge-0/0/0 unit 0" paths)
+        m = re.match(r'^set\s+interfaces\s+(\S+?)(?:\s+unit\s+\d+)?\s+description\s+"?([^";]+)"?', line, re.I)
         if m:
             idx = m.group(1)
             it = iface_map.setdefault(idx, NormInterface(index=idx, enabled=True))
-            it.description = m.group(2)
+            it.description = m.group(2).strip().rstrip('"')
             continue
 
-        # Interface IP
+        # Interface IP — unit style: set interfaces ge-0/0/0 unit 0 family inet address X.X.X.X/N
         m = re.match(
             r'^set\s+interfaces\s+(\S+)\s+unit\s+\d+\s+family\s+inet\s+address\s+(\d+\.\d+\.\d+\.\d+)/(\d+)',
             line, re.I
         )
         if m:
-            ip_val = m.group(2)
-            cidr_val = m.group(3)
+            ip_val, cidr_val = m.group(2), m.group(3)
+            if not _is_valid_ipv4(ip_val) or not (0 <= int(cidr_val) <= 32):
+                cfg.skipped_lines.append(f"{line} (Invalid IPv4 address or CIDR mask)")
+                continue
+            idx = m.group(1)
+            it = iface_map.setdefault(idx, NormInterface(index=idx, enabled=True))
+            it.ip = ip_val
+            it.mask = CIDR_TO_MASK.get(cidr_val, "255.255.255.0")
+            continue
+
+        # Interface IP — hierarchical-flattened style: set interfaces ge-0/0/0 address X.X.X.X/N
+        m = re.match(
+            r'^set\s+interfaces\s+(\S+)\s+address\s+(\d+\.\d+\.\d+\.\d+)/(\d+)',
+            line, re.I
+        )
+        if m:
+            ip_val, cidr_val = m.group(2), m.group(3)
+            if not _is_valid_ipv4(ip_val) or not (0 <= int(cidr_val) <= 32):
+                cfg.skipped_lines.append(f"{line} (Invalid IPv4 address or CIDR mask)")
+                continue
+            idx = m.group(1)
+            it = iface_map.setdefault(idx, NormInterface(index=idx, enabled=True))
+            it.ip = ip_val
+            it.mask = CIDR_TO_MASK.get(cidr_val, "255.255.255.0")
+            continue
+
+        # Interface inet address (hierarchical: set interfaces ge-0/0/0 family inet address X/N)
+        m = re.match(
+            r'^set\s+interfaces\s+(\S+)\s+family\s+inet\s+address\s+(\d+\.\d+\.\d+\.\d+)/(\d+)',
+            line, re.I
+        )
+        if m:
+            ip_val, cidr_val = m.group(2), m.group(3)
             if not _is_valid_ipv4(ip_val) or not (0 <= int(cidr_val) <= 32):
                 cfg.skipped_lines.append(f"{line} (Invalid IPv4 address or CIDR mask)")
                 continue
@@ -899,7 +1089,7 @@ def parse_junos(text: str) -> NormConfig:
             continue
 
         # Interface disable
-        m = re.match(r'^set\s+interfaces\s+(\S+)\s+disable', line, re.I)
+        m = re.match(r'^set\s+interfaces\s+(\S+)(?:\s+unit\s+\d+)?\s+disable', line, re.I)
         if m:
             idx = m.group(1)
             it = iface_map.setdefault(idx, NormInterface(index=idx, enabled=True))
@@ -912,8 +1102,16 @@ def parse_junos(text: str) -> NormConfig:
             vlan_map[m.group(2)] = NormVlan(id=m.group(2), name=m.group(1))
             continue
 
-        # Known benign Junos boilerplate
-        if re.match(r'^set\s+(?:system\s+(?:root-authentication|login|time-zone)|protocols\s+lldp|snmp|chassis)', line, re.I):
+        # Known benign Junos boilerplate — skip silently
+        if re.match(
+            r'^set\s+(?:'
+            r'system\s+(?:root-authentication|login|time-zone|domain-name|name-server|archival|scripts|commit)|'
+            r'protocols\s+(?:lldp|rstp|mstp|ospf|bgp|isis|mpls|rsvp|ldp)|'
+            r'snmp|chassis|forwarding-options|routing-options\s+router-id|'
+            r'class-of-service|policy-options|routing-instances'
+            r')',
+            line, re.I
+        ):
             continue
 
         # Flagged firewall/security in Junos
@@ -921,74 +1119,114 @@ def parse_junos(text: str) -> NormConfig:
             cfg.flagged.append(line)
             continue
 
-        # Anything else in Junos input is unrecognized or syntax error
-        cfg.skipped_lines.append(line)
+        # Anything else is unrecognized
+        if line.lower().startswith('set '):
+            cfg.skipped_lines.append(line)
 
     cfg.interfaces = list(iface_map.values())
     cfg.vlans = list(vlan_map.values())
     return cfg
 
-
 # --------------------------------------------------------------------------
 # FortiOS Parser
 # --------------------------------------------------------------------------
 
+
 def parse_fortios(text: str) -> NormConfig:
     """Parse FortiOS configuration into normalized model."""
     cfg = NormConfig()
-    context: Optional[str] = None
+    context_stack: list[str] = []
     cur_iface: Optional[NormInterface] = None
     cur_vlan: Optional[NormVlan] = None
+    cur_static_route: Optional[dict] = None
+    cur_ospf_net: Optional[dict] = None
     port_counter = 0
     port_index_of: dict[str, str] = {}   # forti_name -> numeric index string
     port_origname: dict[str, str] = {}   # numeric index string -> original forti port name
 
     for raw in text.split('\n'):
         line = raw.strip()
-        if not line:
-            continue
-        if line.startswith('#'):
+        if not line or line.startswith('#'):
             continue
 
-        if re.match(r'^config\s+system\s+global', line, re.I):
-            context = "global"
+        # Check block entry: config <name>
+        m_cfg = re.match(r'^config\s+(.+)$', line, re.I)
+        if m_cfg:
+            block_type = m_cfg.group(1).strip().lower()
+            context_stack.append(block_type)
+            # If firewall or unsupported config, flag it
+            if any(block_type.startswith(p) for p in ["firewall", "vpn", "endpoint-control", "user"]):
+                cfg.flagged.append(line)
             continue
-        if re.match(r'^config\s+system\s+interface', line, re.I):
-            context = "interface"
-            continue
-        if re.match(r'^config\s+(system\s+vlan|vlan)', line, re.I):
-            context = "vlan"
-            continue
-        if re.match(r'^config\s+(firewall|router)', line, re.I):
-            context = "flagged"
-            cfg.flagged.append(line)
-            continue
-        if re.match(r'^config\s+', line, re.I):
-            context = "other_config"
-            continue
+
+        # Check block exit: end
         if re.match(r'^end$', line, re.I):
-            context = None
+            if cur_iface:
+                cfg.interfaces.append(cur_iface)
+                cur_iface = None
+            if cur_vlan:
+                cfg.vlans.append(cur_vlan)
+                cur_vlan = None
+            if cur_static_route:
+                pfx, mask = _parse_ip_mask(cur_static_route.get("dst", "0.0.0.0/0"))
+                gw = cur_static_route.get("gateway")
+                if pfx and mask and gw:
+                    cfg.static_routes.append(NormStaticRoute(prefix=pfx, mask=mask, next_hop=gw))
+                cur_static_route = None
+            if cur_ospf_net:
+                pfx, mask = _parse_ip_mask(cur_ospf_net.get("prefix", ""))
+                area = cur_ospf_net.get("area", "0.0.0.0")
+                if pfx and mask:
+                    wild = _mask_to_wildcard(mask)
+                    if not cfg.ospf_config:
+                        cfg.ospf_config = NormOspfConfig(process_id="1")
+                    cfg.ospf_config.networks.append(NormOspfNetwork(network=pfx, wildcard=wild, area=area))
+                cur_ospf_net = None
+            if context_stack:
+                context_stack.pop()
             continue
 
-        if context == "flagged":
+        current_ctx = context_stack[-1] if context_stack else ""
+        parent_ctx = context_stack[-2] if len(context_stack) >= 2 else ""
+
+        # Flagged contexts (firewall policy, address objects, etc.)
+        if any(ctx.startswith("firewall") or ctx.startswith("vpn") for ctx in context_stack):
             cfg.flagged.append(line)
             continue
 
-        if context == "other_config":
-            continue
-
-        if context == "global":
+        # Global system settings
+        if current_ctx == "system global":
             m = re.match(r'^set\s+hostname\s+"?([^"]+)"?', line, re.I)
             if m:
                 cfg.hostname = m.group(1)
                 cfg.sys_config.hostname = m.group(1)
                 continue
-            if re.match(r'^set\s+(?:timezone|admin-sport|admin-ssh-port|language)\s+', line, re.I):
+            m = re.match(r'^set\s+domain\s+"?([^"]+)"?', line, re.I)
+            if m:
+                cfg.sys_config.domain_name = m.group(1)
+                continue
+            if re.match(r'^set\s+(?:timezone|admin-sport|admin-ssh-port|language|admin-scp|ssh-server-keygen|ssh-enc-algo|ssh-mac-hmac|sshd-curve25519|ssh-cbc-cipher)\s+', line, re.I):
                 continue
             cfg.skipped_lines.append(line)
             continue
 
-        if context == "interface":
+        # SSH settings
+        if current_ctx == "system ssh":
+            if re.match(r'^set\s+status\s+enable', line, re.I):
+                cfg.sys_config.ssh_enabled = True
+                continue
+            m = re.match(r'^set\s+untrusted-hosts-auth-timeout\s+(\d+)', line, re.I)
+            if m:
+                cfg.sys_config.ssh_timeout = int(m.group(1))
+                continue
+            m = re.match(r'^set\s+max-retry\s+(\d+)', line, re.I)
+            if m:
+                cfg.sys_config.ssh_retries = int(m.group(1))
+                continue
+            continue
+
+        # Interface configuration
+        if current_ctx == "system interface":
             m = re.match(r'^edit\s+"?([^"]+)"?', line, re.I)
             if m:
                 if cur_iface:
@@ -1015,31 +1253,37 @@ def parse_fortios(text: str) -> NormConfig:
                 if m:
                     cur_iface.description = m.group(1)
                     continue
-                m = re.match(r'^set\s+ip\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)', line, re.I)
+                m = re.match(r'^set\s+ip\s+(\S+(?:\s+\S+)?)', line, re.I)
                 if m:
-                    ip_val = m.group(1)
-                    mask_val = m.group(2)
-                    if not _is_valid_ipv4(ip_val) or not _is_valid_ipv4(mask_val):
+                    ip_val, mask_val = _parse_ip_mask(m.group(1))
+                    if ip_val and mask_val:
+                        cur_iface.ip = ip_val
+                        cur_iface.mask = mask_val
+                    else:
                         cfg.skipped_lines.append(f"{line} (Invalid IPv4 address or netmask)")
-                        continue
-                    cur_iface.ip = ip_val
-                    cur_iface.mask = mask_val
                     continue
                 m = re.match(r'^set\s+status\s+(up|down)', line, re.I)
                 if m:
                     cur_iface.enabled = m.group(1).lower() == "up"
                     continue
-                if re.match(r'^set\s+(?:vdom|mode|type|allowaccess|snmp-index|mtu-override|broadcast-forward)\s+', line, re.I):
+                m = re.match(r'^set\s+vlanid\s+(\d+)', line, re.I)
+                if m:
+                    cfg.vlans.append(NormVlan(id=m.group(1), name=cur_iface.description or f"VLAN{m.group(1)}"))
+                    continue
+                if re.match(r'^set\s+(?:vdom|mode|type|allowaccess|snmp-index|mtu-override|broadcast-forward|role|device-identification)\s+', line, re.I):
                     continue
                 cfg.skipped_lines.append(line)
                 continue
 
-        if context == "vlan":
+        # VLAN configuration
+        if current_ctx in ("system vlan", "vlan"):
             m = re.match(r'^edit\s+"?([^"]+)"?', line, re.I)
             if m:
                 if cur_vlan:
                     cfg.vlans.append(cur_vlan)
-                cur_vlan = NormVlan(id=m.group(1))
+                vname = m.group(1)
+                vid = re.search(r'\d+', vname)
+                cur_vlan = NormVlan(id=vid.group(0) if vid else vname, name=vname)
                 continue
             if re.match(r'^next$', line, re.I):
                 if cur_vlan:
@@ -1051,10 +1295,102 @@ def parse_fortios(text: str) -> NormConfig:
                 if m:
                     cur_vlan.id = m.group(1)
                     continue
-                if re.match(r'^set\s+(?:interface|description)\s+', line, re.I):
+                if re.match(r'^set\s+(?:interface|description|ip)\s+', line, re.I):
                     continue
                 cfg.skipped_lines.append(line)
                 continue
+
+        # Static Route configuration
+        if current_ctx == "router static":
+            if re.match(r'^edit\s+', line, re.I):
+                if cur_static_route:
+                    pfx, mask = _parse_ip_mask(cur_static_route.get("dst", "0.0.0.0/0"))
+                    gw = cur_static_route.get("gateway")
+                    if pfx and mask and gw:
+                        cfg.static_routes.append(NormStaticRoute(prefix=pfx, mask=mask, next_hop=gw))
+                cur_static_route = {}
+                continue
+            if re.match(r'^next$', line, re.I):
+                if cur_static_route:
+                    pfx, mask = _parse_ip_mask(cur_static_route.get("dst", "0.0.0.0/0"))
+                    gw = cur_static_route.get("gateway")
+                    if pfx and mask and gw:
+                        cfg.static_routes.append(NormStaticRoute(prefix=pfx, mask=mask, next_hop=gw))
+                cur_static_route = None
+                continue
+            if cur_static_route is not None:
+                m = re.match(r'^set\s+dst\s+(\S+(?:\s+\S+)?)', line, re.I)
+                if m:
+                    cur_static_route["dst"] = m.group(1)
+                    continue
+                m = re.match(r'^set\s+gateway\s+(\S+)', line, re.I)
+                if m:
+                    cur_static_route["gateway"] = m.group(1)
+                    continue
+                continue
+
+        # OSPF configuration
+        if current_ctx == "router ospf" or parent_ctx == "router ospf":
+            m = re.match(r'^set\s+router-id\s+(\S+)', line, re.I)
+            if m:
+                if not cfg.ospf_config:
+                    cfg.ospf_config = NormOspfConfig(process_id="1")
+                cfg.ospf_config.router_id = m.group(1)
+                continue
+            if current_ctx == "network":
+                if re.match(r'^edit\s+', line, re.I):
+                    if cur_ospf_net:
+                        pfx, mask = _parse_ip_mask(cur_ospf_net.get("prefix", ""))
+                        area = cur_ospf_net.get("area", "0.0.0.0")
+                        if pfx and mask:
+                            wild = _mask_to_wildcard(mask)
+                            if not cfg.ospf_config:
+                                cfg.ospf_config = NormOspfConfig(process_id="1")
+                            cfg.ospf_config.networks.append(NormOspfNetwork(network=pfx, wildcard=wild, area=area))
+                    cur_ospf_net = {}
+                    continue
+                if re.match(r'^next$', line, re.I):
+                    if cur_ospf_net:
+                        pfx, mask = _parse_ip_mask(cur_ospf_net.get("prefix", ""))
+                        area = cur_ospf_net.get("area", "0.0.0.0")
+                        if pfx and mask:
+                            wild = _mask_to_wildcard(mask)
+                            if not cfg.ospf_config:
+                                cfg.ospf_config = NormOspfConfig(process_id="1")
+                            cfg.ospf_config.networks.append(NormOspfNetwork(network=pfx, wildcard=wild, area=area))
+                    cur_ospf_net = None
+                    continue
+                if cur_ospf_net is not None:
+                    m = re.match(r'^set\s+prefix\s+(\S+(?:\s+\S+)?)', line, re.I)
+                    if m:
+                        cur_ospf_net["prefix"] = m.group(1)
+                        continue
+                    m = re.match(r'^set\s+area\s+(\S+)', line, re.I)
+                    if m:
+                        cur_ospf_net["area"] = m.group(1)
+                        continue
+                continue
+            continue
+
+        # NTP server configuration
+        if "ntp" in current_ctx or "ntp" in parent_ctx:
+            m = re.match(r'^set\s+server\s+"?([^"]+)"?', line, re.I)
+            if m:
+                srv = m.group(1).strip()
+                if srv and srv not in cfg.sys_config.ntp_servers:
+                    cfg.sys_config.ntp_servers.append(srv)
+                continue
+            continue
+
+        # Syslog server configuration
+        if any(k in current_ctx or k in parent_ctx for k in ["syslog", "log syslogd"]):
+            m = re.match(r'^set\s+server\s+"?([^"]+)"?', line, re.I)
+            if m:
+                srv = m.group(1).strip()
+                if srv and srv not in cfg.sys_config.syslog_hosts:
+                    cfg.sys_config.syslog_hosts.append(srv)
+                continue
+            continue
 
         cfg.skipped_lines.append(line)
 
@@ -1103,14 +1439,17 @@ def _junos_iface_to_cisco(junos_iface: str) -> str:
 
 def _forti_index_to_cisco(index: str) -> str:
     """
-    Convert a FortiOS numeric interface index to a Cisco-style interface name.
-    e.g. '1' -> 'GigabitEthernet0/0', '2' -> 'GigabitEthernet0/1'
+    Convert a FortiOS numeric interface index or port name to a Cisco-style interface name.
+    e.g. '1' -> 'GigabitEthernet0/0', 'port1' -> 'GigabitEthernet0/0', 'wan1' -> 'GigabitEthernet0/0'
     """
-    try:
-        n = int(index) - 1  # 0-based port
-        return f"GigabitEthernet0/{n}"
-    except (ValueError, TypeError):
-        return f"GigabitEthernet{index}"
+    m = re.search(r'(\d+)', index)
+    if m:
+        try:
+            n = max(0, int(m.group(1)) - 1)
+            return f"GigabitEthernet0/{n}"
+        except (ValueError, TypeError):
+            pass
+    return "GigabitEthernet0/0"
 
 
 def _forti_index_to_junos(index: str) -> str:
@@ -1171,15 +1510,17 @@ def gen_cisco_iosxe(cfg: NormConfig) -> str:
     for it in cfg.interfaces:
         # Determine the Cisco-style interface name
         idx = it.index
-        if re.match(r'^\d+$', idx):
-            # FortiOS numeric index
+        if re.match(r'^\d+$', idx) or re.match(r'^(?:port|wan|lan|internal|dmz)\d*$', idx, re.I):
+            # FortiOS numeric index or port name
             cisco_name = _forti_index_to_cisco(idx)
         elif re.match(r'^[a-z]+-[\d/]+$', idx, re.I) or re.match(r'^irb\.\d+$', idx, re.I):
             # Junos-style name
             cisco_name = _junos_iface_to_cisco(idx)
-        else:
-            # Already Cisco-style (or unknown)
+        elif re.match(r'^(?:GigabitEthernet|FastEthernet|TenGigabitEthernet|Vlan|Loopback|Serial|Tunnel|Port-channel)', idx, re.I):
+            # Already Cisco-style
             cisco_name = idx
+        else:
+            cisco_name = _forti_index_to_cisco(idx)
 
         out.append(f"interface {cisco_name}")
         if it.description:

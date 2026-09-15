@@ -17,6 +17,7 @@ POST /api/audit              Full audit → unified AuditReport JSON
 
 import ipaddress
 import os
+import sys
 import platform
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,11 +62,11 @@ app.add_middleware(
 )
 
 # Auto-discover scanners on import — never let this crash the server
-print("\n🔍 Discovering scanners...")
+print("\n[*] Discovering scanners...")
 try:
     discover_scanners()
 except Exception as _exc:
-    print(f"  ⚠️  Scanner discovery error (non-fatal): {_exc}")
+    print(f"  [!] Scanner discovery error (non-fatal): {_exc}")
 print()
 
 
@@ -260,11 +261,19 @@ def api_convert_config(req: ConvertRequest) -> Dict[str, Any]:
         return result
     except ValueError as exc:
         tb = traceback.format_exc()
-        print(f"[CONVERT] ValueError: {exc}\n{tb}")
+        try:
+            sys.stdout.buffer.write(f"[CONVERT] ValueError: {exc}\n{tb}\n".encode('utf-8', errors='replace'))
+            sys.stdout.buffer.flush()
+        except Exception:
+            pass
         raise HTTPException(status_code=400, detail=f"Unsupported vendor: {str(exc)}")
     except Exception as exc:
         tb = traceback.format_exc()
-        print(f"[CONVERT] Exception: {exc}\n{tb}")
+        try:
+            sys.stdout.buffer.write(f"[CONVERT] Exception: {exc}\n{tb}\n".encode('utf-8', errors='replace'))
+            sys.stdout.buffer.flush()
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"Conversion failed: {str(exc)}")
 
 
@@ -1030,7 +1039,7 @@ def main() -> None:
     import uvicorn
 
     port = int(os.environ.get("PORT", 8000))
-    print("🛡️  MSME Cyber Auditor — Scanner API Server")
+    print("[*] MSME Cyber Auditor - Scanner API Server")
     print(f"   Registered scanners: {list(get_all_scanners().keys())}")
     print(f"   Frontend: http://localhost:{port}")
     print(f"   API docs: http://localhost:{port}/docs\n")
