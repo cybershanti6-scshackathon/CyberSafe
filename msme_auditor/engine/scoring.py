@@ -28,6 +28,8 @@ def calculate_score(checks: List[SecurityCheck]) -> int:
     Compute a weighted compliance score (0–100) from a list of checks.
 
     Critical checks count 3× more than Medium, etc.
+    Checks that could not be determined ("Unable to determine") are
+    excluded from the score so that missing data doesn't penalize the result.
 
     Args:
         checks: The security checks to score.
@@ -37,9 +39,21 @@ def calculate_score(checks: List[SecurityCheck]) -> int:
     """
     if not checks:
         return 0
-    total_weight = sum(_WEIGHTS.get(c.severity, 1) for c in checks)
+
+    # Exclude indeterminate checks from scoring
+    scorable = [
+        c for c in checks
+        if not (
+            c.check_id == "scan_error"
+            or (c.actual_value or "").startswith("Unable to determine")
+        )
+    ]
+    if not scorable:
+        return 0
+
+    total_weight = sum(_WEIGHTS.get(c.severity, 1) for c in scorable)
     passed_weight = sum(
-        _WEIGHTS.get(c.severity, 1) for c in checks if c.passed
+        _WEIGHTS.get(c.severity, 1) for c in scorable if c.passed
     )
     return int((passed_weight / total_weight) * 100)
 

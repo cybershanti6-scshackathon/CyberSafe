@@ -90,18 +90,24 @@ class RPP4Scanner(BaseScanner):
         log_scan_event(audit_logger, self.scanner_id, sc.target or "localhost", "started")
 
         try:
+            hashes = None
             if tt == "linux":
                 hashes = self._scan_shadow()
             elif tt == "web" and sc.target:
                 hashes = self._scan_web(sc.target)
             elif "sample_hashes" in cfg:
                 hashes = [identify_hash(h) for h in cfg["sample_hashes"]]
+
+            # If no hashes available and no target, report unable to determine
+            if hashes is None:
+                has_config = any(k in cfg for k in ("sample_hashes", "encryption_at_rest"))
+                if not has_config:
+                    result = self._scan_no_data(policy)
+                else:
+                    result = self._build_checks([], cfg.get("encryption_at_rest", False), policy)
             else:
-                hashes = []
-
-            enc = cfg.get("encryption_at_rest", False) if tt == "manual" else False
-
-            result = self._build_checks(hashes, enc, policy)
+                enc = cfg.get("encryption_at_rest", False)
+                result = self._build_checks(hashes, enc, policy)
         except Exception as exc:
             result = [self._scan_error(str(exc))]
         finally:
@@ -240,6 +246,43 @@ class RPP4Scanner(BaseScanner):
         ))
 
         return checks
+
+    def _scan_no_data(self, policy: dict) -> List[SecurityCheck]:
+        """Return checks when no hash data is available to analyze."""
+        approved = set(policy.get("approved_algorithms", []))
+        return [
+            make_check(
+                "no_plaintext", "No Plaintext Passwords", False,
+                "0 plaintext passwords", "Unable to determine (no hash data)",
+                SeverityLevel.HIGH,
+                "Provide sample password hashes or run scan on the target system",
+            ),
+            make_check(
+                "hash_algorithm", "Secure Hash Algorithm", False,
+                f"Approved: {', '.join(sorted(approved))}" if approved else "bcrypt, Argon2, or scrypt",
+                "Unable to determine (no hash data)",
+                SeverityLevel.HIGH,
+                "Provide sample password hashes or run scan on the target system",
+            ),
+            make_check(
+                "salting", "Password Salting", False,
+                "All passwords salted", "Unable to determine (no hash data)",
+                SeverityLevel.HIGH,
+                "Provide sample password hashes or run scan on the target system",
+            ),
+            make_check(
+                "no_weak", "No Weak Hash Algorithms", False,
+                "No MD5, SHA1, or unsalted hashes", "Unable to determine (no hash data)",
+                SeverityLevel.HIGH,
+                "Provide sample password hashes or run scan on the target system",
+            ),
+            make_check(
+                "encryption_at_rest", "Database Encryption at Rest", False,
+                "Enabled (TDE or volume encryption)", "Unable to determine",
+                SeverityLevel.HIGH,
+                "Provide encryption status or run scan on the target system",
+            ),
+        ]
 
     # =========================================================================
     # Helpers

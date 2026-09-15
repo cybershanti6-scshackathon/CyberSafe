@@ -61,6 +61,7 @@ class RPP3Scanner(BaseScanner):
         log_scan_event(audit_logger, self.scanner_id, sc.target or "localhost", "started")
 
         try:
+            result = None
             if tt == "windows":
                 result = self._scan_windows(policy)
             elif tt == "azure_ad":
@@ -69,7 +70,12 @@ class RPP3Scanner(BaseScanner):
                 result = self._scan_linux_ssh(policy)
             elif tt == "web" and sc.target:
                 result = self._scan_web(sc.target, policy)
-            else:
+
+            # If OS scan failed or no target provided, fall back to config
+            if result is None or (
+                len(result) == 1
+                and result[0].check_id == "scan_error"
+            ):
                 result = self._scan_config(cfg, policy)
         except Exception as exc:
             result = [self._scan_error(str(exc))]
@@ -303,7 +309,49 @@ class RPP3Scanner(BaseScanner):
     # Config (Manual Input) Scanner
     # =========================================================================
     def _scan_config(self, cfg: dict, policy: dict) -> List[SecurityCheck]:
-        """Build checks from manually-supplied MFA configuration."""
+        """Build checks from manually-supplied MFA configuration.
+
+        When config is empty, returns "Unable to determine" checks.
+        """
+        # If no MFA config was provided at all, report as unable to determine
+        has_mfa_config = any(k in cfg for k in (
+            "admin_mfa_enabled", "remote_mfa_enabled",
+            "critical_mfa_enabled", "mfa_method", "policy_exists",
+        ))
+        if not has_mfa_config:
+            return [
+                make_check(
+                    "admin_mfa", "MFA for Administrative Accounts", False,
+                    "Enabled (TOTP/Hardware Key)", "Unable to determine",
+                    SeverityLevel.HIGH,
+                    "Provide MFA configuration or run scan on the target system",
+                ),
+                make_check(
+                    "remote_mfa", "MFA for Remote Access", False,
+                    "Enabled for SSH/RDP/VPN", "Unable to determine",
+                    SeverityLevel.HIGH,
+                    "Provide MFA configuration or run scan on the target system",
+                ),
+                make_check(
+                    "critical_mfa", "MFA for Critical Systems", False,
+                    "Enabled for all critical systems", "Unable to determine",
+                    SeverityLevel.HIGH,
+                    "Provide MFA configuration or run scan on the target system",
+                ),
+                make_check(
+                    "mfa_method", "MFA Method Security", False,
+                    "TOTP, Hardware Key, or FIDO2", "Unable to determine",
+                    SeverityLevel.HIGH,
+                    "Provide MFA method or run scan on the target system",
+                ),
+                make_check(
+                    "mfa_policy", "MFA Enforcement Policy", False,
+                    "Documented policy mandating MFA", "Unable to determine",
+                    SeverityLevel.MEDIUM,
+                    "Provide MFA policy status or run scan on the target system",
+                ),
+            ]
+
         return self._build_checks(
             cfg.get("admin_mfa_enabled", False),
             cfg.get("remote_mfa_enabled", False),

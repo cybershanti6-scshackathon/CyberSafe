@@ -80,14 +80,20 @@ class RPP1Scanner(BaseScanner):
         log_scan_event(audit_logger, self.scanner_id, sc.target or "localhost", "started")
 
         try:
+            result = None
             if target_type == "windows":
                 result = self._scan_windows(policy)
             elif target_type == "linux":
                 result = self._scan_linux(policy)
             elif target_type == "web" and sc.target:
                 result = self._scan_web(sc.target, policy)
-            else:
-                result = self._scan_config(cfg)
+
+            # If OS scan failed or no target provided, use config with CERT-In defaults
+            if result is None or (
+                len(result) == 1
+                and result[0].check_id == "scan_error"
+            ):
+                result = self._scan_config(cfg, policy)
         except Exception as exc:
             result = [self._scan_error(str(exc))]
         finally:
@@ -345,19 +351,41 @@ class RPP1Scanner(BaseScanner):
     # =========================================================================
     # Config (Manual Input) Scanner
     # =========================================================================
-    def _scan_config(self, cfg: dict) -> List[SecurityCheck]:
-        """Build checks from manually-supplied configuration values."""
-        policy = load_policy()
-        evidence = {
-            "min_length": cfg.get("min_length", 0),
-            "uppercase": cfg.get("require_uppercase", False),
-            "lowercase": cfg.get("require_lowercase", False),
-            "numbers": cfg.get("require_numbers", False),
-            "special": cfg.get("require_special_chars", False),
-            "max_age_days": cfg.get("max_age_days", 0),
-            "history_count": cfg.get("history_count", 0),
-            "education": cfg.get("education_policy_exists", False),
-        }
+    def _scan_config(self, cfg: dict, policy: dict) -> List[SecurityCheck]:
+        """Build checks from manually-supplied configuration values.
+
+        When config fields are missing, returns "Unable to determine" checks
+        instead of reporting False (which would be inaccurate).
+        """
+        # Only include values the user actually provided; None = not provided
+        evidence: Dict[str, Any] = {}
+        if "min_length" in cfg:
+            evidence["min_length"] = cfg["min_length"]
+        if "require_uppercase" in cfg:
+            evidence["uppercase"] = cfg["require_uppercase"]
+        if "require_lowercase" in cfg:
+            evidence["lowercase"] = cfg["require_lowercase"]
+        if "require_numbers" in cfg:
+            evidence["numbers"] = cfg["require_numbers"]
+        if "require_special_chars" in cfg:
+            evidence["special"] = cfg["require_special_chars"]
+        if "max_age_days" in cfg:
+            evidence["max_age_days"] = cfg["max_age_days"]
+        if "history_count" in cfg:
+            evidence["history_count"] = cfg["history_count"]
+        if "education_policy_exists" in cfg:
+            evidence["education"] = cfg["education_policy_exists"]
+
+        # Derive complexity from individual flags if all are present
+        if all(k in cfg for k in ("require_uppercase", "require_lowercase",
+                                   "require_numbers", "require_special_chars")):
+            evidence["complexity_enabled"] = all([
+                cfg["require_uppercase"],
+                cfg["require_lowercase"],
+                cfg["require_numbers"],
+                cfg["require_special_chars"],
+            ])
+
         return self._build_checks(evidence, policy)
 
     # =========================================================================
@@ -369,9 +397,9 @@ class RPP1Scanner(BaseScanner):
 
         ERROR is returned when evidence cannot be determined (not FAIL).
         """
-        min_len = evidence.get("min_pw_len") or evidence.get("minlen") or evidence.get("min_length")
-        max_age = evidence.get("max_pw_age") or evidence.get("pass_max_days") or evidence.get("max_age_days")
-        history = evidence.get("history") or evidence.get("reuse_history") or evidence.get("history_count")
+        min_len = self._first(evidence, "min_pw_len", "minlen", "min_length")
+        max_age = self._first(evidence, "max_pw_age", "pass_max_days", "max_age_days")
+        history = self._first(evidence, "history", "reuse_history", "history_count")
         complexity = evidence.get("complexity_enabled")
 
         checks: List[SecurityCheck] = []
@@ -390,23 +418,8 @@ class RPP1Scanner(BaseScanner):
             ))
 
         # Check 2-5: Complexity requirements
-        if complexity is None:
-            # Can't determine — report as error, not fail
-            for cid, name in [
-                ("uppercase", "Uppercase Required"),
-                ("lowercase", "Lowercase Required"),
-                ("numbers", "Numbers Required"),
-                ("special", "Special Chars Required"),
-            ]:
-                checks.append(make_check(
-                    cid, name, False,
-                    "Required",
-                    "Unable to determine (check permissions)",
-                    SeverityLevel.HIGH,
-                    "Run with elevated privileges to check complexity settings",
-                ))
-        else:
-            # Complexity is a single flag on Windows
+        if complexity is not None:
+            # Single flag (Windows/Linux)
             for cid, name in [
                 ("uppercase", "Uppercase Required"),
                 ("lowercase", "Lowercase Required"),
@@ -420,6 +433,44 @@ class RPP1Scanner(BaseScanner):
                     SeverityLevel.HIGH,
                     f"Enable {cid} requirement in password policy",
                 ))
+        else:
+            # Individual flags from manual/web config
+            flag_map = {
+                "uppercase": "uppercase",
+                "lowercase": "lowercase",
+                "numbers": "numbers",
+                "special": "special",
+            }
+            name_map = {
+                "uppercase": "Uppercase Required",
+                "lowercase": "Lowercase Required",
+                "numbers": "Numbers Required",
+                "special": "Special Chars Required",
+            }
+            has_any_individual = any(
+                evidence.get(k) for k in flag_map
+            )
+            if has_any_individual:
+                # Use individual flags from config
+                for cid in ["uppercase", "lowercase", "numbers", "special"]:
+                    enabled = evidence.get(cid, False)
+                    checks.append(make_check(
+                        cid, name_map[cid], enabled,
+                        "Required",
+                        "Enabled" if enabled else "Disabled",
+                        SeverityLevel.HIGH,
+                        f"Enable {cid} requirement in password policy",
+                    ))
+            else:
+                # Can't determine — report as error, not fail
+                for cid, name in name_map.items():
+                    checks.append(make_check(
+                        cid, name, False,
+                        "Required",
+                        "Unable to determine (check permissions)",
+                        SeverityLevel.HIGH,
+                        "Run with elevated privileges to check complexity settings",
+                    ))
 
         # Check 6: Password expiry
         if max_age is None:
@@ -460,15 +511,23 @@ class RPP1Scanner(BaseScanner):
             ))
 
         # Check 8: Education policy
-        education = evidence.get("education", False)
-        checks.append(make_check(
-            "education", "User Education Policy",
-            education,
-            "Documented policy",
-            "Found" if education else "Not found",
-            SeverityLevel.MEDIUM,
-            "Create a password policy document and conduct quarterly training.",
-        ))
+        if "education" in evidence:
+            education = evidence["education"]
+            checks.append(make_check(
+                "education", "User Education Policy",
+                education,
+                "Documented policy",
+                "Found" if education else "Not found",
+                SeverityLevel.MEDIUM,
+                "Create a password policy document and conduct quarterly training.",
+            ))
+        else:
+            checks.append(make_check(
+                "education", "User Education Policy", False,
+                "Documented policy", "Unable to determine",
+                SeverityLevel.MEDIUM,
+                "Provide education policy status or run scan on the target system",
+            ))
 
         return checks
 
@@ -551,6 +610,17 @@ class RPP1Scanner(BaseScanner):
     # =========================================================================
     # Helpers
     # =========================================================================
+    @staticmethod
+    def _first(d: dict, *keys: str) -> Optional[int]:
+        """Return the first value from *d* whose key is in *keys*, or None.
+
+        Unlike ``d.get(k1) or d.get(k2)``, this does NOT treat 0 as missing.
+        """
+        for k in keys:
+            if k in d:
+                return d[k]
+        return None
+
     @staticmethod
     def _extract(pattern: str, text: str) -> Optional[int]:
         """Extract an integer value from text using a regex pattern."""

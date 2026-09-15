@@ -107,9 +107,9 @@ def discover_scanners() -> None:
                 ):
                     instance = attr()
                     register_scanner(instance)
-                    print(f"  ✅ {instance.scanner_id}: {instance.name}")
+                    print(f"  [OK] {instance.scanner_id}: {instance.name}")
 
         except Exception as exc:
-            print(f"  ⚠️  {mod_name}: {exc}")
+            print(f"  [WARN] {mod_name}: {exc}")
 
     print(f"\n[registry] {len(_REGISTRY)} scanner(s) registered")

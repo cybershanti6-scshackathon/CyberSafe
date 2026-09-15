@@ -208,19 +208,52 @@ def build_result(
 
     score = calculate_score(checks)
 
-    if score >= 90:
+    # Separate indeterminate checks from real failures
+    def _is_indeterminate(c: SecurityCheck) -> bool:
+        return (
+            c.check_id == "scan_error"
+            or (c.actual_value or "").startswith("Unable to determine")
+        )
+
+    indeterminate = [c for c in checks if _is_indeterminate(c)]
+    failed = [c for c in checks if not c.passed and not _is_indeterminate(c)]
+    real_checks = [c for c in checks if not _is_indeterminate(c)]
+
+    # If all checks are indeterminate, report as error (not failure)
+    if not real_checks:
+        status = ComplianceStatus.ERROR
+        summary = (
+            f"{sub_control_name}: Unable to determine compliance "
+            f"({len(indeterminate)} checks could not be evaluated). "
+            "Provide target data or run on the actual system."
+        )
+        finding = (
+            "The scanner could not gather enough information to evaluate "
+            f"{sub_control_name}. "
+            "This typically happens when:\n"
+            "- No target URL/host was provided for web scans\n"
+            "- The scanner lacks permissions for OS-level checks\n"
+            "- Required configuration data was not supplied\n\n"
+            "To get accurate results, provide the scan target or fill in "
+            "the configuration fields."
+        )
+    elif score >= 90:
         status = ComplianceStatus.PASSED
-    elif score >= 60:
-        status = ComplianceStatus.WARNING
-    else:
-        status = ComplianceStatus.FAILED
-
-    failed = [c for c in checks if not c.passed]
-
-    if not failed:
         summary = f"{sub_control_name} meets CERT-In requirements."
         finding = "All checks passed."
+    elif score >= 60:
+        status = ComplianceStatus.WARNING
+        names = [c.check_name for c in failed[:3]]
+        summary = f"{sub_control_name} partial compliance: {', '.join(names)}"
+        finding = (
+            f"Found {len(failed)} issue(s):\n"
+            + "\n".join(
+                f"- {c.check_name}: Expected {c.expected_value}, found {c.actual_value}"
+                for c in failed
+            )
+        )
     else:
+        status = ComplianceStatus.FAILED
         names = [c.check_name for c in failed[:3]]
         summary = f"{sub_control_name} issues: {', '.join(names)}"
         finding = (
@@ -231,21 +264,34 @@ def build_result(
             )
         )
 
-    if score < 60:
+    # Impact assessment
+    if status == ComplianceStatus.ERROR:
+        impact = (
+            f"UNKNOWN RISK: {sub_control_name} could not be assessed. "
+            "Provide scan target or configuration data to determine risk."
+        )
+        ai_rem = (
+            f"{sub_control_name} could not be evaluated. "
+            "Provide target data or fill in configuration fields."
+        )
+    elif score < 60:
         impact = (
             f"CRITICAL RISK: {sub_control_name} gaps create significant "
             "breach risk and regulatory exposure."
         )
+        ai_rem = f"Fix all failed {sub_control_name.lower()} checks."
     elif score < 90:
         impact = (
             f"HIGH RISK: Partial {sub_control_name.lower()} coverage "
             "leaves vulnerabilities."
         )
+        ai_rem = f"Fix all failed {sub_control_name.lower()} checks."
     else:
         impact = (
             f"LOW RISK: Strong {sub_control_name.lower()} demonstrates "
             "compliance."
         )
+        ai_rem = "All checks passed. Continue monitoring."
 
     remediation: Optional[str] = None
     if failed:
@@ -261,11 +307,15 @@ def build_result(
         sub_control_name=sub_control_name,
         status=status,
         score=score,
-        severity=SeverityLevel.CRITICAL if score < 60 else SeverityLevel.HIGH,
+        severity=(
+            SeverityLevel.INFO if status == ComplianceStatus.ERROR
+            else SeverityLevel.CRITICAL if score < 60
+            else SeverityLevel.HIGH
+        ),
         summary=summary,
         finding_details=finding,
         business_impact=impact,
-        ai_remediation=f"Fix all failed {sub_control_name.lower()} checks.",
+        ai_remediation=ai_rem,
         remediation_script=remediation,
         checks=checks,
         target_system=target,

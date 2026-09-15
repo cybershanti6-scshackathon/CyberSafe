@@ -66,13 +66,19 @@ class RPP2Scanner(BaseScanner):
         log_scan_event(audit_logger, self.scanner_id, sc.target or "localhost", "started")
 
         try:
+            result = None
             if tt == "windows":
                 result = self._scan_windows(policy)
             elif tt == "linux":
                 result = self._scan_linux(policy)
             elif tt == "web" and sc.target:
                 result = self._scan_web(sc.target, policy)
-            else:
+
+            # If OS scan failed or no target provided, fall back to config
+            if result is None or (
+                len(result) == 1
+                and result[0].check_id == "scan_error"
+            ):
                 result = self._scan_config(cfg, policy)
         except Exception as exc:
             result = [self._scan_error(str(exc))]

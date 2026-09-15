@@ -16,11 +16,14 @@ POST /api/audit              Full audit → unified AuditReport JSON
 """
 
 import ipaddress
+import os
 import platform
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+
+import traceback
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,7 +100,10 @@ class ScanRequest(BaseModel):
             parsed = urlparse(v if "://" in v else f"https://{v}")
             host = parsed.hostname
             if host:
-                ip = ipaddress.ip_address(host)
+                try:
+                    ip = ipaddress.ip_address(host)
+                except ValueError:
+                    return v
                 if ip.is_private or ip.is_loopback:
                     raise ValueError(
                         "Private/loopback targets require authorization file entry. "
@@ -241,16 +247,24 @@ def api_convert_config(req: ConvertRequest) -> Dict[str, Any]:
     """
     from msme_auditor.config_parsers.config_converter import convert_config
     
+    import time
     try:
+        start = time.time()
         result = convert_config(
             source_vendor=req.source_vendor,
             target_vendor=req.target_vendor,
             config_text=req.config_text,
         )
+        elapsed_ms = round((time.time() - start) * 1000)
+        result["conversion_time_ms"] = elapsed_ms
         return result
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        tb = traceback.format_exc()
+        print(f"[CONVERT] ValueError: {exc}\n{tb}")
+        raise HTTPException(status_code=400, detail=f"Unsupported vendor: {str(exc)}")
     except Exception as exc:
+        tb = traceback.format_exc()
+        print(f"[CONVERT] Exception: {exc}\n{tb}")
         raise HTTPException(status_code=500, detail=f"Conversion failed: {str(exc)}")
 
 
