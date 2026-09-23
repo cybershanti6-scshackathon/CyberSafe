@@ -84,9 +84,9 @@ python3 launch.py
 
 ---
 
-## 🌐 After Starting
+## 🌐 Getting Started
 
-⚠️ Note About the Live Demo
+⚠️ Note About the Project
 
 The live demo is hosted on Render's free tier. Because of Render's free-tier behavior, the service may go to sleep after a period of inactivity.
 
@@ -109,6 +109,7 @@ Note: The first visit may take longer than subsequent visits. Once the server is
 
 ---
 
+## Project URL
 **Your live URL:** `https://cybersafe-urpz.onrender.com`
 
 ---
