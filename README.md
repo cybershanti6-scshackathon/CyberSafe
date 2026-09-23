@@ -114,4 +114,4 @@ python3 launch.py
 ## 📄 License
 
 Internal project — CERT-In Compliance Scanner for MSMEs.
-# ~CyberSafe-SIH
+# CyberSafe-SIH
