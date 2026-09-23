@@ -86,11 +86,13 @@ python3 launch.py
 
 ## 🌐 After Starting
 
-| Page | URL |
-|------|-----|
-| Home | http://localhost:8000 |
-| Dashboard | http://localhost:8000/dashboard.html |
-| API Docs | http://localhost:8000/docs |
+⚠️ Note About the Live Demo
+
+The live demo is hosted on Render's free tier. Because of Render's free-tier behavior, the service may go to sleep after a period of inactivity.
+
+If the website doesn't load immediately, please wait a few seconds and refresh the page while the server starts up.
+
+Note: The first visit may take longer than subsequent visits. Once the server is awake, the website should load normally.
 
 ---
 
